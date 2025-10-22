@@ -96,6 +96,10 @@ export default function Home() {
             <Link href="/add-address" className="btn-secondary">
               <i className="fas fa-plus"></i> เพิ่มที่อยู่
             </Link>
+            <Link href="/import" className="btn-secondary">
+  <i className="fas fa-file-import"></i> นำเข้า CSV
+</Link>
+
           </div>
         </div>
       </div>
