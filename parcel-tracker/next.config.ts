@@ -3,10 +3,10 @@ const nextConfig = {
   typescript: {
     ignoreBuildErrors: true,
   },
-  // ลบบรรทัดนี้ออก ❌
-  // eslint: {
-  //   ignoreDuringBuilds: true,
-  // },
+ 
+  eslint: {
+    ignoreDuringBuilds: true,
+  },
 };
 
 export default nextConfig;

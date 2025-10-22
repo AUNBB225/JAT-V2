@@ -12,7 +12,6 @@ export async function GET() {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 
-  // จัดกลุ่มตามตำบล
   const locations: Record<string, string[]> = {};
   
   data.forEach((item) => {
@@ -24,7 +23,6 @@ export async function GET() {
     }
   });
 
-  // เรียงลำดับหมู่
   Object.keys(locations).forEach(sub => {
     locations[sub].sort((a, b) => {
       const numA = parseInt(a.match(/\d+/)?.[0] || '0');
