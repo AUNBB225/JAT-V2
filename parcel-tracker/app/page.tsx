@@ -53,7 +53,7 @@ export default function Home() {
       setFilteredParcels(parcels);
     } else {
       const query = searchQuery.toLowerCase().trim();
-      const filtered = parcels.filter(parcel => 
+      const filtered = parcels.filter(parcel =>
         parcel.address.toLowerCase().includes(query)
       );
       setFilteredParcels(filtered);
@@ -72,7 +72,6 @@ export default function Home() {
       alert('ไม่มีพิกัด GPS ในรายการที่กรอง');
       return;
     }
-
     const coordinates = parcelsWithGPS.map((p) => `${p.latitude},${p.longitude}`);
     const url = `https://www.google.com/maps/dir/${coordinates.join('/')}/`;
     window.open(url, '_blank');
@@ -80,14 +79,12 @@ export default function Home() {
 
   const handleUpdateParcel = (updated: Parcel) => {
     const newParcels = parcels.map((p) => (p.id === updated.id ? updated : p));
-    
     const sortedParcels = newParcels.sort((a, b) => {
       if (a.on_truck === b.on_truck) {
         return (a.display_order || 0) - (b.display_order || 0);
       }
       return a.on_truck ? -1 : 1;
     });
-    
     setParcels(sortedParcels);
   };
 
@@ -96,45 +93,33 @@ export default function Home() {
   };
 
   return (
-    <div className="container mx-auto min-h-screen py-6 px-4">
+    <div className="container">
       {/* Header */}
-      <div className="app-header mb-6">
-        <div className="text-center">
-          <div className="flex items-center gap-3 justify-center mb-4">
-            <div className="w-14 h-14 rounded-xl flex items-center justify-center netflix-gradient shadow-lg">
-              <span className="text-white font-bold text-2xl"></span>
-            </div>
-            <div className="text-left">
-              <h1 className="text-2xl font-bold app-title mb-0">ระบบติดตามพัสดุ</h1>
-              <p className="text-sm app-subtitle"></p>
-            </div>
-          </div>
-          
-          <div className="flex gap-3 justify-center flex-wrap">
-            <Link href="/database" className="btn-primary">
-              <i className="fas fa-database"></i> จัดการ DATABASE
-            </Link>
-            <Link href="/add-address" className="btn-secondary">
-              <i className="fas fa-plus"></i> เพิ่มที่อยู่
-            </Link>
-            <Link href="/import" className="btn-secondary">
-              <i className="fas fa-file-import"></i> นำเข้า CSV
-            </Link>
-          </div>
+      <div className="app-header">
+        <h1 className="app-title">ระบบติดตามพัสดุ</h1>
+        <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', marginTop: '1.5rem' }}>
+          <Link href="/database" className="btn-primary">
+            <i className="fas fa-database"></i> จัดการ DATABASE
+          </Link>
+          <Link href="/add-address" className="btn-secondary">
+            <i className="fas fa-plus-circle"></i> เพิ่มที่อยู่
+          </Link>
+          <Link href="/import" className="btn-secondary">
+            <i className="fas fa-file-upload"></i> นำเข้า CSV
+          </Link>
         </div>
       </div>
 
       {/* Area Selection */}
-      <div className="glass-card p-6 mb-6">
-        <h2 className="text-xl font-bold mb-4 flex items-center gap-2">
-          <i className="fas fa-location-dot" style={{ color: 'var(--primary)' }}></i>
+      <div className="glass-card" style={{ padding: '1.5rem', marginBottom: '1.5rem' }}>
+        <h2 style={{ fontSize: '1.25rem', fontWeight: '800', marginBottom: '1.25rem', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+          <i className="fas fa-map-marked-alt" style={{ color: 'var(--primary)' }}></i>
           เลือกพื้นที่จัดส่ง
         </h2>
-
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+        <div style={{ display: 'grid', gap: '1rem', gridTemplateColumns: '1fr', marginBottom: '0' }}>
           <div>
-            <label className="block text-sm font-semibold mb-2 text-text-secondary">
-              <i className="fas fa-city mr-2"></i>ตำบล
+            <label className="form-label">
+              <i className="fas fa-building"></i> ตำบล
             </label>
             <select
               className="input-field"
@@ -147,16 +132,13 @@ export default function Home() {
             >
               <option value="">เลือกตำบล</option>
               {Object.keys(locations).map((sub) => (
-                <option key={sub} value={sub}>
-                  {sub}
-                </option>
+                <option key={sub} value={sub}>{sub}</option>
               ))}
             </select>
           </div>
-
           <div>
-            <label className="block text-sm font-semibold mb-2 text-text-secondary">
-              <i className="fas fa-house-user mr-2"></i>หมู่
+            <label className="form-label">
+              <i className="fas fa-home"></i> หมู่
             </label>
             <select
               className="input-field"
@@ -170,105 +152,120 @@ export default function Home() {
               <option value="">เลือกหมู่</option>
               {selectedSubDistrict &&
                 locations[selectedSubDistrict]?.map((village) => (
-                  <option key={village} value={village}>
-                    {village}
-                  </option>
+                  <option key={village} value={village}>{village}</option>
                 ))}
             </select>
           </div>
         </div>
-
-        {/* Search Bar - ใต้ dropdown */}
-        {parcels.length > 0 && (
-          <div className="mb-4">
-            <label className="block text-sm font-semibold mb-2 text-text-secondary">
-              <i className="fas fa-search mr-2"></i>ค้นหาที่อยู่
-            </label>
-            <div className="relative">
-              <input
-                type="text"
-                className="input-field"
-                placeholder="ค้นหาที่อยู่... (เช่น 50/4, ก๊วยจั๊บ)"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                style={{ paddingRight: searchQuery ? '3rem' : '1rem' }}
-              />
-              {searchQuery && (
-                <button
-                  onClick={clearSearch}
-                  className="absolute right-3 top-1/2 transform -translate-y-1/2 text-text-secondary hover:text-primary transition-colors"
-                  style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '1.25rem' }}
-                  type="button"
-                >
-                  <i className="fas fa-times-circle"></i>
-                </button>
-              )}
-            </div>
-            {searchQuery && (
-              <p className="text-text-secondary text-sm mt-2">
-                <i className="fas fa-filter mr-2 text-primary"></i>
-                พบ <strong className="text-primary">{filteredParcels.length}</strong> จาก {parcels.length} รายการ
-              </p>
-            )}
-          </div>
-        )}
-
-        {/* Google Maps Button */}
-        {filteredParcels.some((p) => p.latitude && p.longitude) && (
-          <button onClick={openRoute} className="btn-primary w-full">
-            <i className="fas fa-route mr-2"></i>
-            ดูเส้นทางใน GOOGLE MAPS
-            {searchQuery && filteredParcels.length !== parcels.length && (
-              <span className="ml-2 opacity-75">
-                ({filteredParcels.filter(p => p.latitude && p.longitude).length} ที่อยู่)
-              </span>
-            )}
-          </button>
-        )}
       </div>
 
+      {/* Search Bar - ใต้ dropdown */}
+      {parcels.length > 0 && (
+        <div className="glass-card" style={{ padding: '1rem', marginBottom: '1.5rem' }}>
+          <label className="form-label" style={{ marginBottom: '0.75rem' }}>
+            <i className="fas fa-search"></i> ค้นหาที่อยู่
+          </label>
+          <div style={{ position: 'relative' }}>
+            <input
+              type="text"
+              className="input-field"
+              placeholder="พิมพ์ที่อยู่เพื่อค้นหา..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              style={{ paddingRight: searchQuery ? '3rem' : '1rem' }}
+            />
+            {searchQuery && (
+              <button
+                onClick={clearSearch}
+                style={{
+                  position: 'absolute',
+                  right: '0.75rem',
+                  top: '50%',
+                  transform: 'translateY(-50%)',
+                  background: 'var(--primary)',
+                  border: 'none',
+                  borderRadius: '50%',
+                  width: '28px',
+                  height: '28px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  cursor: 'pointer',
+                  color: 'white',
+                }}
+              >
+                <i className="fas fa-times"></i>
+              </button>
+            )}
+          </div>
+          {searchQuery && (
+            <p style={{ marginTop: '0.75rem', fontSize: '0.875rem', color: 'var(--text-secondary)' }}>
+              พบ {filteredParcels.length} จาก {parcels.length} รายการ
+            </p>
+          )}
+        </div>
+      )}
+
+      {/* Google Maps Button */}
+      {filteredParcels.some((p) => p.latitude && p.longitude) && (
+        <button onClick={openRoute} className="btn-primary" style={{ width: '100%', marginBottom: '1.5rem' }}>
+          <i className="fas fa-map-marked-alt"></i>
+          ดูเส้นทางใน GOOGLE MAPS
+          {searchQuery && filteredParcels.length !== parcels.length && (
+            <span style={{ marginLeft: '0.5rem', opacity: 0.8 }}>
+              ({filteredParcels.filter(p => p.latitude && p.longitude).length} ที่อยู่)
+            </span>
+          )}
+        </button>
+      )}
+
       {/* Stats */}
-      <div className="grid grid-cols-2 gap-4 mb-6">
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '1rem', marginBottom: '1.5rem' }}>
         <div className="stat-card">
           <div className="stat-icon primary">
-            <i className="fas fa-truck-fast"></i>
+            <i className="fas fa-truck"></i>
           </div>
-          <p className="text-xs mb-1 text-text-secondary">พัสดุบนรถ</p>
-          <p className="text-3xl font-bold text-primary">{stats.onTruck}</p>
+          <div>
+            <p style={{ fontSize: '0.875rem', color: 'var(--text-secondary)', marginBottom: '0.25rem' }}>พัสดุบนรถ</p>
+            <h3 style={{ fontSize: '2rem', fontWeight: '900' }}>{stats.onTruck}</h3>
+          </div>
         </div>
         <div className="stat-card">
           <div className="stat-icon secondary">
-            <i className="fas fa-map-location-dot"></i>
+            <i className="fas fa-box"></i>
           </div>
-          <p className="text-xs mb-1 text-text-secondary">ที่อยู่ทั้งหมด</p>
-          <p className="text-3xl font-bold text-text-primary">{stats.total}</p>
+          <div>
+            <p style={{ fontSize: '0.875rem', color: 'var(--text-secondary)', marginBottom: '0.25rem' }}>ที่อยู่ทั้งหมด</p>
+            <h3 style={{ fontSize: '2rem', fontWeight: '900' }}>{stats.total}</h3>
+          </div>
         </div>
       </div>
 
       {/* Parcel List */}
-      <div>
-        <h2 className="text-xl font-bold mb-4 flex items-center gap-2 flex-wrap">
-          <i className="fas fa-boxes-stacked text-primary"></i>
-          <span>รายการพัสดุ</span>
+      <div className="glass-card" style={{ padding: '1.5rem' }}>
+        <h2 style={{ fontSize: '1.25rem', fontWeight: '800', marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+          <i className="fas fa-list" style={{ color: 'var(--primary)' }}></i>
+          รายการพัสดุ
           {searchQuery && (
-            <span className="text-sm font-normal text-text-secondary bg-surface-elevated px-3 py-1 rounded-full">
-              ค้นหา: &quot;{searchQuery}&quot;
+            <span style={{ fontSize: '0.875rem', fontWeight: '600', color: 'var(--text-secondary)' }}>
+              ค้นหา: "{searchQuery}"
             </span>
           )}
         </h2>
-        
+
         {loading ? (
-          <div className="flex flex-col justify-center items-center py-20 glass-card rounded-xl">
+          <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', padding: '3rem' }}>
             <div className="spinner"></div>
-            <p className="mt-4 text-text-secondary">กำลังโหลด...</p>
+            <p style={{ marginLeft: '1rem', color: 'var(--text-secondary)' }}>กำลังโหลด...</p>
           </div>
         ) : filteredParcels.length === 0 && parcels.length > 0 ? (
           <div className="empty-state">
             <i className="fas fa-search"></i>
             <h3>ไม่พบผลการค้นหา</h3>
-            <p>ไม่พบที่อยู่ที่ตรงกับ &quot;{searchQuery}&quot;</p>
-            <button onClick={clearSearch} className="btn-secondary mt-4">
-              <i className="fas fa-times mr-2"></i>ล้างการค้นหา
+            <p style={{ marginBottom: '1.5rem' }}>ไม่พบที่อยู่ที่ตรงกับ "{searchQuery}"</p>
+            <button onClick={clearSearch} className="btn-primary">
+              <i className="fas fa-times"></i>
+              ล้างการค้นหา
             </button>
           </div>
         ) : filteredParcels.length === 0 ? (
@@ -278,43 +275,47 @@ export default function Home() {
             <p>เลือกพื้นที่หรือเพิ่มที่อยู่ใหม่</p>
           </div>
         ) : (
-          <div className="space-y-4">
+          <div>
+            {/* บนรถแล้ว */}
             {filteredParcels.filter(p => p.on_truck).length > 0 && (
               <>
-                <div className="parcel-section-header">
-                  <i className="fas fa-truck-fast text-primary text-xl"></i>
-                  <h3>บนรถแล้ว</h3>
-                  <span className="parcel-section-count">
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '1rem' }}>
+                  <h3 style={{ fontSize: '1.1rem', fontWeight: '700', color: 'var(--primary)' }}>
+                    <i className="fas fa-check-circle"></i> บนรถแล้ว
+                  </h3>
+                  <span className="badge badge-primary">
                     {filteredParcels.filter(p => p.on_truck).length}
                   </span>
                 </div>
-                <div className="space-y-3">
-                  {filteredParcels.filter(p => p.on_truck).map((parcel) => (
-                    <ParcelItem
-                      key={parcel.id}
-                      parcel={parcel}
-                      onUpdate={handleUpdateParcel}
-                    />
-                  ))}
-                </div>
+                {filteredParcels.filter(p => p.on_truck).map((parcel, index) => (
+                  <ParcelItem 
+                    key={parcel.id} 
+                    parcel={parcel} 
+                    onUpdate={handleUpdateParcel}
+                    displayNumber={index + 1}
+                  />
+                ))}
               </>
             )}
-            
+
+            {/* รอจัดส่ง */}
             {filteredParcels.filter(p => !p.on_truck).length > 0 && (
               <>
-                <div className="parcel-section-header" style={{ borderLeftColor: 'var(--text-secondary)', marginTop: filteredParcels.filter(p => p.on_truck).length > 0 ? '2rem' : '0' }}>
-                  <i className="fas fa-clock text-text-secondary text-xl"></i>
-                  <h3>รอจัดส่ง</h3>
-                  <span className="parcel-section-count" style={{ background: 'var(--divider)' }}>
-                    {filteredParcels.filter(p => !p.on_truck).length}
-                  </span>
-                </div>
-                <div className="space-y-3">
-                  {filteredParcels.filter(p => !p.on_truck).map((parcel) => (
-                    <ParcelItem
-                      key={parcel.id}
-                      parcel={parcel}
+                <div style={{ marginTop: filteredParcels.filter(p => p.on_truck).length > 0 ? '2rem' : '0' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '1rem' }}>
+                    <h3 style={{ fontSize: '1.1rem', fontWeight: '700', color: 'var(--text-secondary)' }}>
+                      <i className="fas fa-clock"></i> รอจัดส่ง
+                    </h3>
+                    <span className="badge badge-secondary">
+                      {filteredParcels.filter(p => !p.on_truck).length}
+                    </span>
+                  </div>
+                  {filteredParcels.filter(p => !p.on_truck).map((parcel, index) => (
+                    <ParcelItem 
+                      key={parcel.id} 
+                      parcel={parcel} 
                       onUpdate={handleUpdateParcel}
+                      displayNumber={filteredParcels.filter(p => p.on_truck).length + index + 1}
                     />
                   ))}
                 </div>

@@ -89,3 +89,100 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Invalid request' }, { status: 400 });
   }
 }
+
+// เพิ่ม PUT method สำหรับอัปเดตข้อมูลพัสดุ
+export async function PUT(request: NextRequest) {
+  try {
+    const body = await request.json();
+    
+    console.log('PUT Body:', body);
+
+    // ตรวจสอบว่ามี id
+    if (!body.id) {
+      return NextResponse.json(
+        { error: 'Missing parcel ID' },
+        { status: 400 }
+      );
+    }
+
+    // สร้าง object สำหรับอัปเดต (เฉพาะ field ที่ส่งมา)
+    const updateData: any = {};
+    
+    if (typeof body.on_truck === 'boolean') {
+      updateData.on_truck = body.on_truck;
+    }
+    if (typeof body.parcel_count === 'number') {
+      updateData.parcel_count = body.parcel_count;
+    }
+    if (body.address !== undefined) {
+      updateData.address = body.address;
+    }
+    if (body.latitude !== undefined) {
+      updateData.latitude = body.latitude;
+    }
+    if (body.longitude !== undefined) {
+      updateData.longitude = body.longitude;
+    }
+    if (typeof body.display_order === 'number') {
+      updateData.display_order = body.display_order;
+    }
+
+    // อัปเดตข้อมูล
+    const { data, error } = await supabase
+      .from('parcels')
+      .update(updateData)
+      .eq('id', body.id)
+      .select()
+      .single();
+
+    if (error) {
+      console.error('PUT Error:', error);
+      return NextResponse.json({ error: error.message }, { status: 500 });
+    }
+
+    if (!data) {
+      return NextResponse.json(
+        { error: 'Parcel not found' },
+        { status: 404 }
+      );
+    }
+
+    return NextResponse.json(data, { status: 200 });
+  } catch (err) {
+    console.error('PUT Exception:', err);
+    return NextResponse.json({ error: 'Invalid request' }, { status: 400 });
+  }
+}
+
+// เพิ่ม DELETE method สำหรับลบข้อมูลพัสดุ (ถ้าต้องการ)
+export async function DELETE(request: NextRequest) {
+  try {
+    const { searchParams } = new URL(request.url);
+    const id = searchParams.get('id');
+
+    if (!id) {
+      return NextResponse.json(
+        { error: 'Missing parcel ID' },
+        { status: 400 }
+      );
+    }
+
+    const { error } = await supabase
+      .from('parcels')
+      .delete()
+      .eq('id', id);
+
+    if (error) {
+      console.error('DELETE Error:', error);
+      return NextResponse.json({ error: error.message }, { status: 500 });
+    }
+
+    return NextResponse.json(
+      { message: 'Parcel deleted successfully' },
+      { status: 200 }
+    );
+  } catch (err) {
+    console.error('DELETE Exception:', err);
+    return NextResponse.json({ error: 'Invalid request' }, { status: 400 });
+  }
+}
