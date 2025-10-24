@@ -159,7 +159,44 @@ export default function Home() {
         </div>
       </div>
 
-      {/* Search Bar - ใต้ dropdown */}
+
+
+      {/* Google Maps Button */}
+      {filteredParcels.some((p) => p.latitude && p.longitude) && (
+        <button onClick={openRoute} className="btn-primary" style={{ width: '100%', marginBottom: '1.5rem' }}>
+          <i className="fas fa-map-marked-alt"></i>
+          ดูเส้นทางใน GOOGLE MAPS
+          {searchQuery && filteredParcels.length !== parcels.length && (
+            <span style={{ marginLeft: '0.5rem', opacity: 0.8 }}>
+              ({filteredParcels.filter(p => p.latitude && p.longitude).length} ที่อยู่)
+            </span>
+          )}
+        </button>
+      )}
+
+      {/* Stats */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '1rem', marginBottom: '1.5rem' }}>
+        <div className="stat-card">
+          <div className="stat-icon primary">
+            <i className="fas fa-truck"></i>
+          </div>
+          <div>
+            <p style={{ fontSize: '0.875rem', color: 'var(--text-secondary)', marginBottom: '0.25rem' }}>พัสดุบนรถ</p>
+            <h3 style={{ fontSize: '2rem', fontWeight: '900' }}>{stats.onTruck}</h3>
+          </div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-icon secondary">
+            <i className="fas fa-box"></i>
+          </div>
+          <div>
+            <p style={{ fontSize: '0.875rem', color: 'var(--text-secondary)', marginBottom: '0.25rem' }}>ที่อยู่ทั้งหมด</p>
+            <h3 style={{ fontSize: '2rem', fontWeight: '900' }}>{stats.total}</h3>
+          </div>
+        </div>
+      </div>
+
+            {/* Search Bar - ใต้ dropdown */}
       {parcels.length > 0 && (
         <div className="glass-card" style={{ padding: '1rem', marginBottom: '1.5rem' }}>
           <label className="form-label" style={{ marginBottom: '0.75rem' }}>
@@ -205,41 +242,6 @@ export default function Home() {
           )}
         </div>
       )}
-
-      {/* Google Maps Button */}
-      {filteredParcels.some((p) => p.latitude && p.longitude) && (
-        <button onClick={openRoute} className="btn-primary" style={{ width: '100%', marginBottom: '1.5rem' }}>
-          <i className="fas fa-map-marked-alt"></i>
-          ดูเส้นทางใน GOOGLE MAPS
-          {searchQuery && filteredParcels.length !== parcels.length && (
-            <span style={{ marginLeft: '0.5rem', opacity: 0.8 }}>
-              ({filteredParcels.filter(p => p.latitude && p.longitude).length} ที่อยู่)
-            </span>
-          )}
-        </button>
-      )}
-
-      {/* Stats */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '1rem', marginBottom: '1.5rem' }}>
-        <div className="stat-card">
-          <div className="stat-icon primary">
-            <i className="fas fa-truck"></i>
-          </div>
-          <div>
-            <p style={{ fontSize: '0.875rem', color: 'var(--text-secondary)', marginBottom: '0.25rem' }}>พัสดุบนรถ</p>
-            <h3 style={{ fontSize: '2rem', fontWeight: '900' }}>{stats.onTruck}</h3>
-          </div>
-        </div>
-        <div className="stat-card">
-          <div className="stat-icon secondary">
-            <i className="fas fa-box"></i>
-          </div>
-          <div>
-            <p style={{ fontSize: '0.875rem', color: 'var(--text-secondary)', marginBottom: '0.25rem' }}>ที่อยู่ทั้งหมด</p>
-            <h3 style={{ fontSize: '2rem', fontWeight: '900' }}>{stats.total}</h3>
-          </div>
-        </div>
-      </div>
 
       {/* Parcel List */}
       <div className="glass-card" style={{ padding: '1.5rem' }}>
