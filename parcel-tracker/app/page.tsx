@@ -96,7 +96,7 @@ export default function Home() {
     <div className="container">
       {/* Header */}
       <div className="app-header">
-        <h1 className="app-title">ระบบติดตามพัสดุ</h1>
+        <h1 className="app-title">J&T</h1>
         <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', marginTop: '1.5rem' }}>
           <Link href="/database" className="btn-primary">
             <i className="fas fa-database"></i> จัดการ DATABASE
@@ -107,6 +107,10 @@ export default function Home() {
           <Link href="/import" className="btn-secondary">
             <i className="fas fa-file-upload"></i> นำเข้า CSV
           </Link>
+          <Link href="/sort-csv" className="btn-secondary">
+  <i className="fas fa-sort"></i> จัดลำดับ CSV
+</Link>
+
         </div>
       </div>
 
