@@ -110,6 +110,9 @@ export default function Home() {
           <Link href="/sort-csv" className="btn-secondary">
   <i className="fas fa-sort"></i> จัดลำดับ CSV
 </Link>
+          <Link href="/scan" className="btn-secondary">
+  <i className="fas fa-sort"></i> SCAN
+</Link>
 
         </div>
       </div>
