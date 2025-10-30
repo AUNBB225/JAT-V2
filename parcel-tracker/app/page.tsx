@@ -1,11 +1,13 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
 import { Parcel } from '@/lib/supabase';
 import ParcelItem from '@/components/ParcelItem';
 import Link from 'next/link';
 
 export default function Home() {
+  const router = useRouter();
   const [locations, setLocations] = useState<Record<string, string[]>>({});
   const [selectedSubDistrict, setSelectedSubDistrict] = useState('');
   const [selectedVillage, setSelectedVillage] = useState('');
@@ -13,6 +15,7 @@ export default function Home() {
   const [filteredParcels, setFilteredParcels] = useState<Parcel[]>([]);
   const [loading, setLoading] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  const [isResetting, setIsResetting] = useState(false);
 
   useEffect(() => {
     fetch('/api/locations')
@@ -60,8 +63,38 @@ export default function Home() {
     }
   }, [searchQuery, parcels]);
 
+  // Handle Reset Parcels
+  const handleResetParcels = async () => {
+    if (!window.confirm('⚠️ คุณแน่ใจหรือไม่?\n\nคำสั่งนี้จะรีเซ็ต on_truck ของพัสดุทั้งหมด')) {
+      return;
+    }
+
+    setIsResetting(true);
+
+    try {
+      const response = await fetch('/api/reset-parcels', {
+        method: 'POST',
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to reset parcels');
+      }
+
+      const data = await response.json();
+      alert('✅ รีเซ็ตพัสดุทั้งหมดเรียบร้อย');
+      
+      // Refresh หน้า
+      router.refresh();
+    } catch (error) {
+      console.error('Reset error:', error);
+      alert('❌ ไม่สามารถรีเซ็ตพัสดุ');
+    } finally {
+      setIsResetting(false);
+    }
+  };
+
   const stats = {
-    onTruck: parcels.filter((p) => p.on_truck).reduce((sum, p) => sum + p.parcel_count, 0),
+    onTruck: parcels.filter((p) => p.on_truck).reduce((sum, p) => sum + (p.parcel_count || 0), 0),
     total: parcels.length,
     filtered: filteredParcels.length,
   };
@@ -108,12 +141,33 @@ export default function Home() {
             <i className="fas fa-file-upload"></i> นำเข้า CSV
           </Link>
           <Link href="/sort-csv" className="btn-secondary">
-  <i className="fas fa-sort"></i> จัดลำดับ CSV
-</Link>
+            <i className="fas fa-sort"></i> จัดลำดับ CSV
+          </Link>
           <Link href="/scan" className="btn-secondary">
-  <i className="fas fa-sort"></i> SCAN
-</Link>
-
+            <i className="fas fa-barcode"></i> SCAN
+          </Link>
+          <button
+            onClick={handleResetParcels}
+            disabled={isResetting}
+            style={{
+              padding: '0.75rem 1.5rem',
+              background: 'rgba(229, 9, 20, 0.9)',
+              color: 'white',
+              border: 'none',
+              borderRadius: '8px',
+              fontSize: '0.875rem',
+              fontWeight: '600',
+              cursor: isResetting ? 'not-allowed' : 'pointer',
+              opacity: isResetting ? 0.6 : 1,
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.5rem',
+              transition: 'all 0.2s ease'
+            }}
+          >
+            <i className="fas fa-redo"></i>
+            {isResetting ? 'กำลังรีเซ็ต...' : 'รีเซ็ต'}
+          </button>
         </div>
       </div>
 
@@ -166,8 +220,6 @@ export default function Home() {
         </div>
       </div>
 
-
-
       {/* Google Maps Button */}
       {filteredParcels.some((p) => p.latitude && p.longitude) && (
         <button onClick={openRoute} className="btn-primary" style={{ width: '100%', marginBottom: '1.5rem' }}>
@@ -203,7 +255,7 @@ export default function Home() {
         </div>
       </div>
 
-            {/* Search Bar - ใต้ dropdown */}
+      {/* Search Bar - ใต้ dropdown */}
       {parcels.length > 0 && (
         <div className="glass-card" style={{ padding: '1rem', marginBottom: '1.5rem' }}>
           <label className="form-label" style={{ marginBottom: '0.75rem' }}>
