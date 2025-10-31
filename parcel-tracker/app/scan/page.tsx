@@ -11,14 +11,15 @@ interface ScanResult {
   scannedRouteCode?: string;
   scannedAddress?: string;
   expectedRouteCode?: string;
-  parcel?: Parcel;
+  parcel?: Parcel & { foundInDifferentVillage?: boolean; foundVillage?: string; foundSubDistrict?: string };
   error?: string;
 }
 
 export default function ScanParcelPage() {
   const [locations, setLocations] = useState<Record<string, string[]>>({});
+  const [villageNames, setVillageNames] = useState<Record<string, string>>({});
   const [selectedSubDistrict, setSelectedSubDistrict] = useState('');
-  const [selectedVillage, setSelectedVillage] = useState('');
+  const [selectedVillage, setSelectedVillage] = useState(''); // "3 หมู่บ้านสรานนท์"
   const [routeCode, setRouteCode] = useState('');
   const [parcels, setParcels] = useState<Parcel[]>([]);
   const [isScanning, setIsScanning] = useState(false);
@@ -27,9 +28,16 @@ export default function ScanParcelPage() {
   const [lastScanResult, setLastScanResult] = useState<ScanResult | null>(null);
   const [manualAddress, setManualAddress] = useState('');
   const [showManualEntry, setShowManualEntry] = useState(false);
+  const [frameBounds, setFrameBounds] = useState({
+    x: 0,
+    y: 0,
+    width: 300,
+    height: 200
+  });
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const frameRef = useRef<HTMLDivElement>(null);
   
   // Audio refs
   const scanSoundRef = useRef<HTMLAudioElement | null>(null);
@@ -106,21 +114,88 @@ export default function ScanParcelPage() {
   useEffect(() => {
     fetch('/api/locations')
       .then((res) => res.json())
-      .then((data) => setLocations(data))
+      .then((data: Record<string, string[]>) => {
+        setLocations(data);
+        console.log('Locations loaded:', data);
+        
+        // Build village names mapping from actual parcel data
+        const nameMap: Record<string, string> = {};
+        let completed = 0;
+        let total = 0;
+
+        // Count total villages first
+        Object.entries(data).forEach(([_, villages]) => {
+          total += villages.length;
+        });
+
+        console.log('Total villages to fetch:', total);
+
+        // Fetch village names from parcels
+        Object.entries(data).forEach(([subDistrict, villages]) => {
+          villages.forEach((village: string) => {
+            fetch(`/api/parcels?sub_district=${subDistrict}&village=${village}`)
+              .then((res) => res.json())
+              .then((parcels: Parcel[]) => {
+                completed++;
+                if (parcels.length > 0 && parcels[0].village) {
+                  // ชื่อเต็ม จาก field 'village' ของ parcel
+                  nameMap[village] = parcels[0].village;
+                  console.log(`Village ${village} -> ${parcels[0].village}`);
+                } else {
+                  nameMap[village] = village;
+                }
+                
+                // Update state เมื่อเสร็จ
+                if (completed === total) {
+                  console.log('All village names loaded:', nameMap);
+                  setVillageNames(nameMap);
+                }
+              })
+              .catch((error) => {
+                console.error(`Failed to fetch parcels for village ${village}:`, error);
+                completed++;
+                nameMap[village] = village;
+                
+                if (completed === total) {
+                  console.log('All village names loaded (with errors):', nameMap);
+                  setVillageNames(nameMap);
+                }
+              });
+          });
+        });
+      })
       .catch(console.error);
   }, []);
 
-  useEffect(() => {
-    if (selectedSubDistrict && selectedVillage) {
-      fetch(`/api/parcels?sub_district=${selectedSubDistrict}&village=${selectedVillage}`)
-        .then((res) => res.json())
-        .then((data) => {
-          const sorted = [...data].sort((a, b) => (a.display_order || 0) - (b.display_order || 0));
-          setParcels(sorted);
-        })
-        .catch(console.error);
+  // Handle village change - fetch parcels ตามชื่อเต็ม
+  const handleVillageChange = async (villageName: string) => {
+    setSelectedVillage(villageName); // "3 หมู่บ้านสรานนท์"
+    
+    try {
+      // ✅ ส่ง village_full_name ไป API
+      const response = await fetch(
+        `/api/parcels?sub_district=${selectedSubDistrict}&village_full_name=${encodeURIComponent(villageName)}`
+      );
+      const data = await response.json();
+      
+      console.log(`Loaded ${data.length} parcels for village: ${villageName}`);
+      
+      // จัดลำดับตาม display_order
+      const sorted = [...data].sort((a, b) => {
+        if (a.display_order && b.display_order) {
+          return a.display_order - b.display_order;
+        }
+        if (a.display_order) return -1;
+        if (b.display_order) return 1;
+        return 0;
+      });
+      
+      setParcels(sorted);
+    } catch (error) {
+      console.error('Error fetching parcels:', error);
+      setParcels([]);
     }
-  }, [selectedSubDistrict, selectedVillage]);
+  };
 
   const startCamera = async () => {
     try {
@@ -134,6 +209,22 @@ export default function ScanParcelPage() {
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
         setCameraActive(true);
+        
+        // Update frame bounds หลัง camera ready
+        setTimeout(() => {
+          if (frameRef.current && videoRef.current) {
+            const rect = frameRef.current.getBoundingClientRect();
+            const videoRect = videoRef.current.getBoundingClientRect();
+            
+            setFrameBounds({
+              x: rect.left - videoRect.left,
+              y: rect.top - videoRect.top,
+              width: rect.width,
+              height: rect.height
+            });
+            console.log('Frame bounds after camera start:', { x: rect.left - videoRect.left, y: rect.top - videoRect.top, width: rect.width, height: rect.height });
+          }
+        }, 500);
       }
     } catch (error) {
       console.error('Camera error:', error);
@@ -150,6 +241,171 @@ export default function ScanParcelPage() {
     }
   };
 
+  // Function to find matching parcel (shared logic)
+  const findMatchingParcel = (
+    allParcels: Parcel[], 
+    scannedAddress: string, 
+    searchAllVillages = false
+  ): (Parcel & { foundInDifferentVillage?: boolean; foundVillage?: string; foundSubDistrict?: string }) | null => {
+    const scannedClean = scannedAddress.replace(/[^0-9\/]/g, '');
+
+    console.log('Total parcels:', allParcels.length);
+    console.log('Scanned address:', scannedAddress, '→ Clean:', scannedClean);
+    console.log('Search all villages:', searchAllVillages);
+    console.log('Selected village:', selectedVillage);
+
+    let matchedParcel: (Parcel & { foundInDifferentVillage?: boolean; foundVillage?: string; foundSubDistrict?: string }) | null = null;
+    let isFromDifferentVillage = false;
+
+    // ถ้า clean แล้วเหลือตัวเลข → ค้นหาแบบตัวเลข
+    if (scannedClean && scannedClean.length >= 2 && !scannedClean.startsWith('0')) {
+      
+      // กรอง: เฉพาะที่อยู่ที่ขึ้นต้นด้วยตัวเลข
+      const addressesStartWithNumber = allParcels.filter((p: Parcel) => 
+        /^[\d\/]/.test(p.address.trim())
+      );
+
+      console.log('Addresses starting with number:', addressesStartWithNumber.length);
+
+      // Priority 1: Match เฉพาะส่วนตัวเลข/slash ที่ขึ้นต้น
+      const priority1Match = addressesStartWithNumber.find((p: Parcel) => {
+        const addressTrimmed = p.address.trim();
+        const houseNumberMatch = addressTrimmed.match(/^([\d\/]+)/);
+        
+        if (!houseNumberMatch) return false;
+        
+        const houseNumber = houseNumberMatch[1];
+        const houseNumberClean = houseNumber.replace(/[^0-9\/]/g, '');
+        return houseNumberClean === scannedClean;
+      });
+
+      if (priority1Match) {
+        matchedParcel = priority1Match as (Parcel & { foundInDifferentVillage?: boolean; foundVillage?: string; foundSubDistrict?: string });
+        console.log('Priority 1 - Exact house number match:', matchedParcel.address);
+        console.log('  Matched parcel village:', matchedParcel.village);
+      }
+
+      // Priority 2: ถ้าไม่เจอ ลอง clean แล้วเทียบ
+      if (!matchedParcel) {
+        const priority2Match = addressesStartWithNumber.find((p: Parcel) => {
+          const addressTrimmed = p.address.trim();
+          const firstPart = addressTrimmed.split(/[\s,]/)[0];
+          const firstPartClean = firstPart.replace(/[^0-9\/]/g, '');
+          return firstPartClean === scannedClean && firstPartClean.length > 0;
+        });
+        
+        if (priority2Match) {
+          matchedParcel = priority2Match as (Parcel & { foundInDifferentVillage?: boolean; foundVillage?: string; foundSubDistrict?: string });
+          console.log('Priority 2 - Clean exact match:', matchedParcel.address);
+          console.log('  Matched parcel village:', matchedParcel.village);
+        }
+      }
+
+      // Priority 3: Starts with (เช่น 67 → 67/1) - ต้องยาวกว่า 2 ตัว
+      if (!matchedParcel && scannedClean.length >= 3) {
+        const priority3Match = addressesStartWithNumber.find((p: Parcel) => {
+          const addressClean = p.address.replace(/[^0-9\/]/g, '');
+          return addressClean.startsWith(scannedClean);
+        });
+        
+        if (priority3Match) {
+          matchedParcel = priority3Match as (Parcel & { foundInDifferentVillage?: boolean; foundVillage?: string; foundSubDistrict?: string });
+          console.log('Priority 3 - Starts with (min 3 digits):', matchedParcel.address);
+          console.log('  Matched parcel village:', matchedParcel.village);
+        }
+      }
+
+      // Priority 4: Contains (ใช้เมื่อจำเป็น - ต้องยาวกว่า 3 ตัว)
+      if (!matchedParcel && scannedClean.length >= 4) {
+        const priority4Match = allParcels.find((p: Parcel) => {
+          const addressClean = p.address.replace(/[^0-9\/]/g, '');
+          return addressClean.includes(scannedClean);
+        });
+        
+        if (priority4Match) {
+          matchedParcel = priority4Match as (Parcel & { foundInDifferentVillage?: boolean; foundVillage?: string; foundSubDistrict?: string });
+          console.log('Priority 4 - Contains (min 4 digits):', matchedParcel.address);
+          console.log('  Matched parcel village:', matchedParcel.village);
+        }
+      }
+
+      // ถ้าเจออยู่แล้ว ตรวจสอบว่าอยู่หมู่เดียวกันไหม
+      if (matchedParcel) {
+        console.log('Checking village match:');
+        console.log('  matchedParcel.village:', matchedParcel.village);
+        console.log('  selectedVillage:', selectedVillage);
+        console.log('  Are they different?', matchedParcel.village !== selectedVillage);
+        
+        // ✅ เทียบชื่อเต็มทั้งหมด ไม่ใช่แค่ code
+        if (matchedParcel.village !== selectedVillage) {
+          isFromDifferentVillage = true;
+          console.log('✓ Found in different village!');
+        }
+      }
+
+    } else if (!scannedClean || scannedClean.length === 0) {
+      // ถ้า clean แล้วไม่เหลืออะไร → ค้นหาแบบชื่อสถานที่
+      console.log('Searching by name (no numbers):', scannedAddress);
+      
+      // ค้นหาแบบ contains ชื่อเต็ม
+      const fullNameMatch = allParcels.find((p: Parcel) => {
+        const addressLower = p.address.toLowerCase();
+        const scannedLower = scannedAddress.toLowerCase();
+        
+        return addressLower.includes(scannedLower);
+      });
+
+      if (fullNameMatch) {
+        matchedParcel = fullNameMatch as (Parcel & { foundInDifferentVillage?: boolean; foundVillage?: string; foundSubDistrict?: string });
+        console.log('Found by name (full match):', matchedParcel.address);
+        console.log('  Matched parcel village:', matchedParcel.village);
+      } else {
+        // ถ้ายังไม่เจอ ลองค้นหาแบบบางส่วน
+        const words = scannedAddress.split(/[\s,]/);
+        const partialNameMatch = allParcels.find((p: Parcel) => {
+          const addressLower = p.address.toLowerCase();
+          return words.some(word => 
+            word.length > 0 && addressLower.includes(word.toLowerCase())
+          );
+        });
+
+        if (partialNameMatch) {
+          matchedParcel = partialNameMatch as (Parcel & { foundInDifferentVillage?: boolean; foundVillage?: string; foundSubDistrict?: string });
+          console.log('Found by name (partial match):', matchedParcel.address);
+          console.log('  Matched parcel village:', matchedParcel.village);
+        }
+      }
+
+      // ตรวจสอบว่าอยู่หมู่เดียวกันไหม
+      if (matchedParcel) {
+        console.log('Checking village match:');
+        console.log('  matchedParcel.village:', matchedParcel.village);
+        console.log('  selectedVillage:', selectedVillage);
+        console.log('  Are they different?', matchedParcel.village !== selectedVillage);
+        
+        // ✅ เทียบชื่อเต็มทั้งหมด ไม่ใช่แค่ code
+        if (matchedParcel.village !== selectedVillage) {
+          isFromDifferentVillage = true;
+          console.log('✓ Found in different village!');
+        }
+      }
+    }
+
+    if (matchedParcel) {
+      matchedParcel.foundInDifferentVillage = isFromDifferentVillage;
+      if (isFromDifferentVillage) {
+        // foundVillage = ชื่อเต็ม จากฐานข้อมูล
+        matchedParcel.foundVillage = matchedParcel.village;
+        matchedParcel.foundSubDistrict = matchedParcel.sub_district;
+        console.log('Set foundVillage:', matchedParcel.foundVillage, 'foundSubDistrict:', matchedParcel.foundSubDistrict);
+      }
+    }
+
+    console.log('Final matched parcel:', matchedParcel?.address || 'Not found');
+    console.log('Found in different village:', isFromDifferentVillage);
+    return matchedParcel;
+  };
+
   // Manual entry function
   const handleManualEntry = async () => {
     if (!manualAddress.trim()) {
@@ -164,35 +420,24 @@ export default function ScanParcelPage() {
     setLastScanResult(null);
 
     try {
+      // ✅ ส่ง village_full_name ไป API
       const response = await fetch(
-        `/api/parcels?sub_district=${selectedSubDistrict}&village=${selectedVillage}`
+        `/api/parcels?sub_district=${selectedSubDistrict}&village_full_name=${encodeURIComponent(selectedVillage)}`
       );
       const allParcels = await response.json();
 
-      const scannedClean = manualAddress.replace(/[^0-9\/]/g, '');
-      
-      // Priority 1: Exact start match
-      let matchedParcel = allParcels.find((p: Parcel) => {
-        const addressTrimmed = p.address.trim();
-        const firstPart = addressTrimmed.split(/[\s,]/)[0];
-        const firstPartClean = firstPart.replace(/[^0-9\/]/g, '');
-        return firstPartClean === scannedClean;
-      });
+      let matchedParcel = findMatchingParcel(allParcels, manualAddress);
 
-      // Priority 2: Starts with
+      // ถ้าไม่เจอในหมู่ที่เลือก ให้ search ทั้งหมด
       if (!matchedParcel) {
-        matchedParcel = allParcels.find((p: Parcel) => {
-          const addressClean = p.address.replace(/[^0-9\/]/g, '');
-          return addressClean.startsWith(scannedClean);
-        });
-      }
-
-      // Priority 3: Contains
-      if (!matchedParcel) {
-        matchedParcel = allParcels.find((p: Parcel) => {
-          const addressClean = p.address.replace(/[^0-9\/]/g, '');
-          return addressClean === scannedClean || addressClean.includes(scannedClean);
-        });
+        console.log('Not found in selected village, searching entire sub_district...');
+        
+        const allSubDistrictResponse = await fetch(
+          `/api/parcels?sub_district=${selectedSubDistrict}`
+        );
+        const allSubDistrictParcels = await allSubDistrictResponse.json();
+        
+        matchedParcel = findMatchingParcel(allSubDistrictParcels, manualAddress, true);
       }
 
       const scanResult: ScanResult = {
@@ -207,76 +452,50 @@ export default function ScanParcelPage() {
       if (matchedParcel) {
         const isDuplicate = matchedParcel.on_truck === true;
         
-if (isDuplicate) {
-  const scannedList = parcels.filter((p) => p.on_truck === true);
-  const duplicateIndex = scannedList.findIndex(p => p.id === matchedParcel.id) + 1;
-  
-  scanResult.match = true;
-  scanResult.message = `พัสดุนี้สแกนแล้ว - ลำดับที่ ${duplicateIndex}`;
-  scanResult.parcel = matchedParcel;
-  setMessage(`⚠️ ${scanResult.message}`);
-  
-  playSound(duplicateSoundRef);
-  speak(`พัสดุนี้สแกนแล้ว ลำดับที่ ${duplicateIndex}`);
+        // ถ้าเจอในหมู่อื่น บอกตำแหน่ง
+        if (matchedParcel.foundInDifferentVillage) {
+          // ✅ เปลี่ยน TTS อ่านชื่อหมู่เต็ม
+          const warningMsg = `⚠️ ที่อยู่นี้อยู่ในหมู่ ${matchedParcel.foundVillage}, ${matchedParcel.foundSubDistrict}`;
+          setMessage(warningMsg);
+          speak(`ที่อยู่นี้อยู่ในหมู่ ${matchedParcel.foundVillage}`);
+          playSound(errorSoundRef);
+          console.log('Speaking found village message');
+        }
+        
+        if (isDuplicate) {
+          const scannedList = parcels.filter((p) => p.on_truck === true);
+          const duplicateIndex = scannedList.findIndex(p => p.id === matchedParcel.id) + 1;
+          
+          scanResult.match = true;
+          scanResult.message = `พัสดุนี้สแกนแล้ว - ลำดับที่ ${duplicateIndex}`;
+          scanResult.parcel = matchedParcel;
+          if (!matchedParcel.foundInDifferentVillage) {
+            setMessage(`⚠️ ${scanResult.message}`);
+          }
+          
+          playSound(duplicateSoundRef);
+          speak(`พัสดุนี้สแกนแล้ว ลำดับที่ ${duplicateIndex}`);
 
-  // Update parcel_count เมื่อสแกนซ้ำ
-  try {
-    console.log('Incrementing parcel_count...');
-    
-    const updateResponse = await fetch('/api/update-status', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        parcel_id: matchedParcel.id,
-        on_truck: true,
-        isDuplicate: true
-      }),
-    });
-
-    if (updateResponse.ok) {
-      console.log('Incremented parcel_count');
-      
-      // Refetch to get updated count
-      const refreshResponse = await fetch(
-        `/api/parcels?sub_district=${selectedSubDistrict}&village=${selectedVillage}`
-      );
-      const updatedParcels = await refreshResponse.json();
-      
-      const sortedParcels = [...updatedParcels].sort((a: Parcel, b: Parcel) => 
-        (a.display_order || 0) - (b.display_order || 0)
-      );
-      setParcels(sortedParcels);
-    } else {
-      console.error('Failed to update parcel_count');
-    }
-  } catch (error) {
-    console.error('Failed to update parcel_count:', error);
-  }
-} else {
-  scanResult.match = true;
-  scanResult.message = `พบพัสดุ: ${matchedParcel.address} ✓`;
-  scanResult.parcel = matchedParcel;
-  setMessage(`✅ ${scanResult.message}`);
-
-  try {
-    console.log('Updating on_truck status...');
-    
-    const updateResponse = await fetch('/api/update-status', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        parcel_id: matchedParcel.id,
-        on_truck: true,
-        isDuplicate: false  // ครั้งแรก
-      }),
-    });
-
+          // Update parcel_count เมื่อสแกนซ้ำ
+          try {
+            console.log('Incrementing parcel_count...');
+            
+            const updateResponse = await fetch('/api/update-status', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                parcel_id: matchedParcel.id,
+                on_truck: true,
+                isDuplicate: true
+              }),
+            });
 
             if (updateResponse.ok) {
-              console.log('Updated on_truck to: true');
+              console.log('Incremented parcel_count');
               
+              // Refetch to get updated count
               const refreshResponse = await fetch(
-                `/api/parcels?sub_district=${selectedSubDistrict}&village=${selectedVillage}`
+                `/api/parcels?sub_district=${selectedSubDistrict}&village_full_name=${encodeURIComponent(selectedVillage)}`
               );
               const updatedParcels = await refreshResponse.json();
               
@@ -284,12 +503,53 @@ if (isDuplicate) {
                 (a.display_order || 0) - (b.display_order || 0)
               );
               setParcels(sortedParcels);
+            } else {
+              console.error('Failed to update parcel_count');
+            }
+          } catch (error) {
+            console.error('Failed to update parcel_count:', error);
+          }
+        } else {
+          if (!matchedParcel.foundInDifferentVillage) {
+            scanResult.match = true;
+            scanResult.message = `พบพัสดุ: ${matchedParcel.address} ✓`;
+            scanResult.parcel = matchedParcel;
+            setMessage(`✅ ${scanResult.message}`);
+          }
+
+          try {
+            console.log('Updating on_truck status...');
+            
+            const updateResponse = await fetch('/api/update-status', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                parcel_id: matchedParcel.id,
+                on_truck: true,
+                isDuplicate: false
+              }),
+            });
+
+            if (updateResponse.ok) {
+              console.log('Updated on_truck to: true');
               
-              const updatedScannedList = sortedParcels.filter((p: Parcel) => p.on_truck === true);
-              const displayIndex = updatedScannedList.findIndex((p: Parcel) => p.id === matchedParcel.id) + 1;
-              
-              playSound(successSoundRef);
-              speak(`สแกนสำเร็จ ลำดับที่ ${displayIndex}`);
+              if (!matchedParcel.foundInDifferentVillage) {
+                const refreshResponse = await fetch(
+                  `/api/parcels?sub_district=${selectedSubDistrict}&village_full_name=${encodeURIComponent(selectedVillage)}`
+                );
+                const updatedParcels = await refreshResponse.json();
+                
+                const sortedParcels = [...updatedParcels].sort((a: Parcel, b: Parcel) => 
+                  (a.display_order || 0) - (b.display_order || 0)
+                );
+                setParcels(sortedParcels);
+                
+                const updatedScannedList = sortedParcels.filter((p: Parcel) => p.on_truck === true);
+                const displayIndex = updatedScannedList.findIndex((p: Parcel) => p.id === matchedParcel.id) + 1;
+                
+                playSound(successSoundRef);
+                speak(`สแกนสำเร็จ ลำดับที่ ${displayIndex}`);
+              }
               
               // Clear manual entry
               setManualAddress('');
@@ -307,8 +567,9 @@ if (isDuplicate) {
           }
         }
       } else {
-        scanResult.message = `ไม่พบพัสดุ "${manualAddress}" ในระบบ`;
-        setMessage(`❌ ${scanResult.message}`);
+        const notFoundMsg = `ไม่พบพัสดุ "${manualAddress}" ในระบบ`;
+        scanResult.message = notFoundMsg;
+        setMessage(`❌ ${notFoundMsg}`);
         
         playSound(errorSoundRef);
         speak(`ไม่พบพัสดุ ${manualAddress} ในระบบ`);
@@ -341,13 +602,51 @@ if (isDuplicate) {
     const context = canvas.getContext('2d');
     context?.drawImage(video, 0, 0);
 
+    // ใช้ frameBounds ที่คำนวณจากจริง
+    const scaleX = canvas.width / (videoRef.current?.clientWidth || 1);
+    const scaleY = canvas.height / (videoRef.current?.clientHeight || 1);
+
+    const cropX = frameBounds.x * scaleX;
+    const cropY = frameBounds.y * scaleY;
+    const cropWidth = frameBounds.width * scaleX;
+    const cropHeight = frameBounds.height * scaleY;
+
+    console.log('Canvas size:', canvas.width, 'x', canvas.height);
+    console.log('Video element size:', videoRef.current?.clientWidth, 'x', videoRef.current?.clientHeight);
+    console.log('Frame bounds:', frameBounds);
+    console.log('Scale:', { scaleX, scaleY });
+    console.log('Crop area:', { cropX, cropY, cropWidth, cropHeight });
+
     setIsScanning(true);
     setMessage('🔍 กำลังสแกน...');
     setLastScanResult(null);
 
     playSound(scanSoundRef);
 
-    canvas.toBlob(async (blob) => {
+    // สร้าง canvas ใหม่สำหรับครอปภาพ
+    const croppedCanvas = document.createElement('canvas');
+    croppedCanvas.width = cropWidth;
+    croppedCanvas.height = cropHeight;
+    const croppedContext = croppedCanvas.getContext('2d');
+    
+    if (croppedContext) {
+      // ครอปเฉพาะส่วนกรอบ
+      croppedContext.drawImage(
+        canvas,
+        cropX,
+        cropY,
+        cropWidth,
+        cropHeight,
+        0,
+        0,
+        cropWidth,
+        cropHeight
+      );
+
+      console.log('Cropped image to:', cropWidth, 'x', cropHeight);
+    }
+
+    croppedCanvas.toBlob(async (blob) => {
       if (!blob) {
         setIsScanning(false);
         setMessage('❌ ไม่สามารถถ่ายภาพได้');
@@ -360,7 +659,8 @@ if (isDuplicate) {
         const formData = new FormData();
         formData.append('image', blob, 'capture.jpg');
 
-        console.log('Sending image to OCR...');
+        console.log('Sending cropped image to OCR...');
+        console.log('Image size:', blob.size, 'bytes');
         
         const response = await fetch('/api/ocr', {
           method: 'POST',
@@ -502,44 +802,38 @@ if (isDuplicate) {
         }
       }
 
+      // ✅ ส่ง village_full_name ไป API
       const response = await fetch(
-        `/api/parcels?sub_district=${selectedSubDistrict}&village=${selectedVillage}`
+        `/api/parcels?sub_district=${selectedSubDistrict}&village_full_name=${encodeURIComponent(selectedVillage)}`
       );
       const allParcels = await response.json();
 
-      console.log('All parcels:', allParcels.map((p: Parcel) => p.address));
+      let matchedParcel = findMatchingParcel(allParcels, scannedAddress);
 
-      const scannedClean = scannedAddress.replace(/[^0-9\/]/g, '');
-
-      let matchedParcel = allParcels.find((p: Parcel) => {
-        const addressTrimmed = p.address.trim();
-        const firstPart = addressTrimmed.split(/[\s,]/)[0];
-        const firstPartClean = firstPart.replace(/[^0-9\/]/g, '');
-        return firstPartClean === scannedClean;
-      });
-
-      console.log('Priority 1 - Exact start match:', matchedParcel?.address);
-
+      // ถ้าไม่เจอในหมู่ที่เลือก ให้ search ทั้งหมด
       if (!matchedParcel) {
-        matchedParcel = allParcels.find((p: Parcel) => {
-          const addressClean = p.address.replace(/[^0-9\/]/g, '');
-          return addressClean.startsWith(scannedClean);
-        });
-        console.log('Priority 2 - Starts with match:', matchedParcel?.address);
+        console.log('Not found in selected village, searching entire sub_district...');
+        
+        const allSubDistrictResponse = await fetch(
+          `/api/parcels?sub_district=${selectedSubDistrict}`
+        );
+        const allSubDistrictParcels = await allSubDistrictResponse.json();
+        
+        matchedParcel = findMatchingParcel(allSubDistrictParcels, scannedAddress, true);
       }
-
-      if (!matchedParcel) {
-        matchedParcel = allParcels.find((p: Parcel) => {
-          const addressClean = p.address.replace(/[^0-9\/]/g, '');
-          return addressClean === scannedClean || addressClean.includes(scannedClean);
-        });
-        console.log('Priority 3 - Contains match:', matchedParcel?.address);
-      }
-
-      console.log('Final matched parcel:', matchedParcel?.address || 'Not found');
 
       if (matchedParcel) {
         const isDuplicate = matchedParcel.on_truck === true;
+        
+        // ถ้าเจอในหมู่อื่น บอกตำแหน่ง
+        if (matchedParcel.foundInDifferentVillage) {
+          // ✅ เปลี่ยน TTS อ่านชื่อหมู่เต็ม
+          const warningMsg = `⚠️ ที่อยู่นี้อยู่ในหมู่ ${matchedParcel.foundVillage}, ${matchedParcel.foundSubDistrict}`;
+          setMessage(warningMsg);
+          speak(`ที่อยู่นี้อยู่ในหมู่ ${matchedParcel.foundVillage}`);
+          playSound(errorSoundRef);
+          console.log('Speaking found village message');
+        }
         
         if (isDuplicate) {
           const scannedList = parcels.filter((p) => p.on_truck === true);
@@ -548,15 +842,52 @@ if (isDuplicate) {
           scanResult.match = true;
           scanResult.message = `พัสดุนี้สแกนแล้ว - ลำดับที่ ${duplicateIndex}`;
           scanResult.parcel = matchedParcel;
-          setMessage(`⚠️ ${scanResult.message}`);
+          if (!matchedParcel.foundInDifferentVillage) {
+            setMessage(`⚠️ ${scanResult.message}`);
+          }
           
           playSound(duplicateSoundRef);
           speak(`พัสดุนี้สแกนแล้ว ลำดับที่ ${duplicateIndex}`);
+
+          // Update parcel_count เมื่อสแกนซ้ำ
+          try {
+            console.log('Incrementing parcel_count...');
+            
+            const updateResponse = await fetch('/api/update-status', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                parcel_id: matchedParcel.id,
+                on_truck: true,
+                isDuplicate: true
+              }),
+            });
+
+            if (updateResponse.ok) {
+              console.log('Incremented parcel_count');
+              
+              const refreshResponse = await fetch(
+                `/api/parcels?sub_district=${selectedSubDistrict}&village_full_name=${encodeURIComponent(selectedVillage)}`
+              );
+              const updatedParcels = await refreshResponse.json();
+              
+              const sortedParcels = [...updatedParcels].sort((a: Parcel, b: Parcel) => 
+                (a.display_order || 0) - (b.display_order || 0)
+              );
+              setParcels(sortedParcels);
+            } else {
+              console.error('Failed to update parcel_count');
+            }
+          } catch (error) {
+            console.error('Failed to update parcel_count:', error);
+          }
         } else {
-          scanResult.match = true;
-          scanResult.message = `พบพัสดุ: ${matchedParcel.address} ✓`;
-          scanResult.parcel = matchedParcel;
-          setMessage(`✅ ${scanResult.message}`);
+          if (!matchedParcel.foundInDifferentVillage) {
+            scanResult.match = true;
+            scanResult.message = `พบพัสดุ: ${matchedParcel.address} ✓`;
+            scanResult.parcel = matchedParcel;
+            setMessage(`✅ ${scanResult.message}`);
+          }
 
           try {
             console.log('Updating on_truck status...');
@@ -566,28 +897,31 @@ if (isDuplicate) {
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
                 parcel_id: matchedParcel.id,
-                on_truck: true
+                on_truck: true,
+                isDuplicate: false
               }),
             });
 
             if (updateResponse.ok) {
               console.log('Updated on_truck to: true');
               
-              const refreshResponse = await fetch(
-                `/api/parcels?sub_district=${selectedSubDistrict}&village=${selectedVillage}`
-              );
-              const updatedParcels = await refreshResponse.json();
-              
-              const sortedParcels = [...updatedParcels].sort((a: Parcel, b: Parcel) => 
-                (a.display_order || 0) - (b.display_order || 0)
-              );
-              setParcels(sortedParcels);
-              
-              const updatedScannedList = sortedParcels.filter((p: Parcel) => p.on_truck === true);
-              const displayIndex = updatedScannedList.findIndex((p: Parcel) => p.id === matchedParcel.id) + 1;
-              
-              playSound(successSoundRef);
-              speak(`สแกนสำเร็จ ลำดับที่ ${displayIndex}`);
+              if (!matchedParcel.foundInDifferentVillage) {
+                const refreshResponse = await fetch(
+                  `/api/parcels?sub_district=${selectedSubDistrict}&village_full_name=${encodeURIComponent(selectedVillage)}`
+                );
+                const updatedParcels = await refreshResponse.json();
+                
+                const sortedParcels = [...updatedParcels].sort((a: Parcel, b: Parcel) => 
+                  (a.display_order || 0) - (b.display_order || 0)
+                );
+                setParcels(sortedParcels);
+                
+                const updatedScannedList = sortedParcels.filter((p: Parcel) => p.on_truck === true);
+                const displayIndex = updatedScannedList.findIndex((p: Parcel) => p.id === matchedParcel.id) + 1;
+                
+                playSound(successSoundRef);
+                speak(`สแกนสำเร็จ ลำดับที่ ${displayIndex}`);
+              }
             } else {
               const errorText = await updateResponse.text();
               console.error('Failed to update on_truck:', errorText);
@@ -601,8 +935,9 @@ if (isDuplicate) {
           }
         }
       } else {
-        scanResult.message = `ไม่พบพัสดุ "${scannedAddress}" ในระบบ`;
-        setMessage(`❌ ${scanResult.message}`);
+        const notFoundMsg = `ไม่พบพัสดุ "${scannedAddress}" ในระบบ`;
+        scanResult.message = notFoundMsg;
+        setMessage(`❌ ${notFoundMsg}`);
         
         playSound(errorSoundRef);
         speak(`ไม่พบพัสดุ ${scannedAddress} ในระบบ`);
@@ -671,6 +1006,7 @@ if (isDuplicate) {
               onChange={(e) => {
                 setSelectedSubDistrict(e.target.value);
                 setSelectedVillage('');
+                setParcels([]);
               }}
               className="input-field"
               style={{ fontSize: '0.875rem', padding: '0.625rem', height: 'auto' }}
@@ -690,18 +1026,21 @@ if (isDuplicate) {
             </label>
             <select
               value={selectedVillage}
-              onChange={(e) => setSelectedVillage(e.target.value)}
+              onChange={(e) => handleVillageChange(e.target.value)}
               disabled={!selectedSubDistrict}
               className="input-field"
               style={{ fontSize: '0.875rem', padding: '0.625rem', height: 'auto' }}
             >
               <option value="">เลือกหมู่</option>
               {selectedSubDistrict &&
-                locations[selectedSubDistrict]?.map((village) => (
-                  <option key={village} value={village}>
-                    หมู่ {village}
-                  </option>
-                ))}
+                locations[selectedSubDistrict]?.map((villageCode: string) => {
+                  const villageName = villageNames[villageCode] || villageCode;
+                  return (
+                    <option key={villageCode} value={villageName}>
+                      หมู่ {villageName}
+                    </option>
+                  );
+                })}
             </select>
           </div>
 
@@ -803,19 +1142,22 @@ if (isDuplicate) {
           )}
 
           {cameraActive && (
-            <div style={{
-              position: 'absolute',
-              top: '50%',
-              left: '50%',
-              transform: 'translate(-50%, -50%)',
-              width: '80%',
-              maxWidth: '300px',
-              aspectRatio: '3/2',
-              border: '3px solid var(--primary)',
-              borderRadius: '12px',
-              pointerEvents: 'none',
-              boxShadow: '0 0 0 9999px rgba(0, 0, 0, 0.5)',
-            }}>
+            <div
+              ref={frameRef}
+              style={{
+                position: 'absolute',
+                top: '50%',
+                left: '50%',
+                transform: 'translate(-50%, -50%)',
+                width: '80%',
+                maxWidth: '300px',
+                aspectRatio: '3/2',
+                border: '3px solid var(--primary)',
+                borderRadius: '12px',
+                pointerEvents: 'none',
+                boxShadow: '0 0 0 9999px rgba(0, 0, 0, 0.5)',
+              }}
+            >
               <div style={{
                 position: 'absolute',
                 top: '-30px',
