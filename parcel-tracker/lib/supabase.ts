@@ -10,7 +10,7 @@ if (!supabaseUrl || !supabaseAnonKey) {
 export const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
 export interface Parcel {
-  id?: number;
+  id: string;
   sub_district: string;
   village: string;
   address: string;

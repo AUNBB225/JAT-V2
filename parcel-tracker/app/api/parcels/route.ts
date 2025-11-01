@@ -5,7 +5,7 @@ export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const subDistrict = searchParams.get('sub_district');
   const village = searchParams.get('village');
-  const villageFullName = searchParams.get('village_full_name'); // ชื่อเต็ม เช่น "3 หมู่บ้านสรานนท์"
+  const villageFullName = searchParams.get('village_full_name');
 
   let query = supabase.from('parcels').select('*');
 
@@ -19,7 +19,6 @@ export async function GET(request: NextRequest) {
     console.log(`Querying full village name: "${villageFullName}"`);
   } else if (village) {
     // Query code: เฉพาะ code (เช่น "3")
-    // ถ้าต้องรวม code + ชื่อเต็มด้วย ให้ใช้ .or()
     query = query.eq('village', village);
     console.log(`Querying village code: "${village}"`);
   }
@@ -100,14 +99,12 @@ export async function POST(request: NextRequest) {
   }
 }
 
-// PUT method สำหรับอัปเดตข้อมูลพัสดุ
 export async function PUT(request: NextRequest) {
   try {
     const body = await request.json();
     
     console.log('PUT Body:', body);
 
-    // ตรวจสอบว่ามี id
     if (!body.id) {
       return NextResponse.json(
         { error: 'Missing parcel ID' },
@@ -115,7 +112,6 @@ export async function PUT(request: NextRequest) {
       );
     }
 
-    // สร้าง object สำหรับอัปเดต (เฉพาะ field ที่ส่งมา)
     const updateData: any = {};
     
     if (typeof body.on_truck === 'boolean') {
@@ -137,7 +133,6 @@ export async function PUT(request: NextRequest) {
       updateData.display_order = body.display_order;
     }
 
-    // อัปเดตข้อมูล
     const { data, error } = await supabase
       .from('parcels')
       .update(updateData)
@@ -164,7 +159,6 @@ export async function PUT(request: NextRequest) {
   }
 }
 
-// DELETE method สำหรับลบข้อมูลพัสดุ
 export async function DELETE(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
