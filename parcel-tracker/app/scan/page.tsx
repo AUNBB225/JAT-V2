@@ -28,6 +28,8 @@ export default function ScanParcelPage() {
   const [lastScanResult, setLastScanResult] = useState<ScanResult | null>(null);
   const [manualAddress, setManualAddress] = useState('');
   const [showManualEntry, setShowManualEntry] = useState(false);
+  const [searchQuery, setSearchQuery] = useState(''); // เพิ่ม state สำหรับค้นหา
+  const [startTime, setStartTime] = useState<number | null>(null); // เพิ่ม state สำหรับเวลา
   const [frameBounds, setFrameBounds] = useState({
     x: 0,
     y: 0,
@@ -38,7 +40,7 @@ export default function ScanParcelPage() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const frameRef = useRef<HTMLDivElement>(null);
-  
+
   // Audio refs
   const scanSoundRef = useRef<HTMLAudioElement | null>(null);
   const successSoundRef = useRef<HTMLAudioElement | null>(null);
@@ -59,18 +61,22 @@ export default function ScanParcelPage() {
   useEffect(() => {
     if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
       window.speechSynthesis.getVoices();
-      
       const loadVoices = () => {
         window.speechSynthesis.getVoices();
       };
-      
       window.speechSynthesis.onvoiceschanged = loadVoices;
-      
       return () => {
         window.speechSynthesis.onvoiceschanged = null;
       };
     }
   }, []);
+
+  // ✅ Set start time when village is selected
+  useEffect(() => {
+    if (selectedVillage && parcels.length > 0 && !startTime) {
+      setStartTime(Date.now());
+    }
+  }, [selectedVillage, parcels, startTime]);
 
   // ✅ Cleanup audio on unmount
   useEffect(() => {
@@ -91,7 +97,6 @@ export default function ScanParcelPage() {
         duplicateSoundRef.current.pause();
         duplicateSoundRef.current.currentTime = 0;
       }
-      
       // Cancel speech synthesis
       if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
         window.speechSynthesis.cancel();
@@ -102,11 +107,9 @@ export default function ScanParcelPage() {
   // ✅ Auto-clear lastScanResult หลัง 5 วินาที
   useEffect(() => {
     if (!lastScanResult || isScanning) return;
-    
     const timer = setTimeout(() => {
       setLastScanResult(null);
     }, 5000);
-
     return () => clearTimeout(timer);
   }, [lastScanResult, isScanning]);
 
@@ -114,33 +117,26 @@ export default function ScanParcelPage() {
   const speak = useCallback((text: string) => {
     if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
       window.speechSynthesis.cancel();
-      
       const utterance = new SpeechSynthesisUtterance(text);
       utterance.lang = 'th-TH';
       utterance.rate = 1.0;
       utterance.pitch = 1.2;
       utterance.volume = 1.0;
-      
       const voices = window.speechSynthesis.getVoices();
-      
       const thaiVoice = voices.find(voice => {
         return voice.lang === 'th-TH' || voice.lang.startsWith('th');
       });
-      
       if (thaiVoice) {
         utterance.voice = thaiVoice;
       }
-
       // ✅ Auto cleanup on end
       utterance.onend = () => {
         window.speechSynthesis.cancel();
       };
-
       // ✅ Auto cleanup on error
       utterance.onerror = () => {
         window.speechSynthesis.cancel();
       };
-      
       window.speechSynthesis.speak(utterance);
     }
   }, []);
@@ -163,30 +159,25 @@ export default function ScanParcelPage() {
           fetch('/api/locations'),
           fetch('/api/village-names')
         ]);
-
         const locData = await locRes.json();
         const namesData = await namesRes.json();
-
         setLocations(locData);
         setVillageNames(namesData);
       } catch (error) {
         console.error('Error loading data:', error);
       }
     };
-
     loadData();
   }, []);
 
   // Handle village change - fetch parcels ตามชื่อเต็ม
   const handleVillageChange = async (villageName: string) => {
     setSelectedVillage(villageName);
-    
     try {
       const response = await fetch(
         `/api/parcels?sub_district=${selectedSubDistrict}&village_full_name=${encodeURIComponent(villageName)}`
       );
       const data = await response.json();
-      
       const sorted = [...data].sort((a, b) => {
         if (a.display_order && b.display_order) {
           return a.display_order - b.display_order;
@@ -195,8 +186,8 @@ export default function ScanParcelPage() {
         if (b.display_order) return 1;
         return 0;
       });
-      
       setParcels(sorted);
+      setStartTime(null); // Reset timer
     } catch (error) {
       console.error('Error fetching parcels:', error);
       setParcels([]);
@@ -206,7 +197,7 @@ export default function ScanParcelPage() {
   const startCamera = async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { 
+        video: {
           facingMode: 'environment',
           width: { ideal: 1920 },
           height: { ideal: 1080 }
@@ -215,12 +206,10 @@ export default function ScanParcelPage() {
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
         setCameraActive(true);
-        
         setTimeout(() => {
           if (frameRef.current && videoRef.current) {
             const rect = frameRef.current.getBoundingClientRect();
             const videoRect = videoRef.current.getBoundingClientRect();
-            
             setFrameBounds({
               x: rect.left - videoRect.left,
               y: rect.top - videoRect.top,
@@ -245,22 +234,94 @@ export default function ScanParcelPage() {
     }
   };
 
-  // ✅ Function to find matching parcel (shared logic) - ลบ console.log ส่วนใหญ่
+  // ✅ ฟังก์ชันสำหรับยกเลิกการสแกนพัสดุแต่ละชิ้น
+  const handleCancelScan = async (parcelId: string) => {
+    try {
+      const response = await fetch('/api/update-status', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          parcel_id: parcelId,
+          on_truck: false,
+        }),
+      });
+
+      if (response.ok) {
+        const refreshResponse = await fetch(
+          `/api/parcels?sub_district=${selectedSubDistrict}&village_full_name=${encodeURIComponent(selectedVillage)}`
+        );
+        const updatedParcels = await refreshResponse.json();
+        const sortedParcels = [...updatedParcels].sort((a: Parcel, b: Parcel) =>
+          (a.display_order || 0) - (b.display_order || 0)
+        );
+        setParcels(sortedParcels);
+        setMessage('✅ ยกเลิกการสแกนแล้ว');
+        playSound(successSoundRef);
+        speak('ยกเลิกการสแกนแล้ว');
+      }
+    } catch (error) {
+      console.error('Failed to cancel scan:', error);
+      setMessage('❌ ไม่สามารถยกเลิกการสแกนได้');
+      playSound(errorSoundRef);
+    }
+  };
+
+  // ✅ ฟังก์ชันเคลียร์ทั้งหมด
+  const handleClearAll = async () => {
+    const confirm = window.confirm('คุณแน่ใจหรือว่าต้องการเคลียร์ทั้งหมด?');
+    if (!confirm) return;
+
+    try {
+      // Update all scanned parcels back to on_truck: false
+      const scannedList = parcels.filter((p) => p.on_truck === true);
+      
+      await Promise.all(
+        scannedList.map((parcel) =>
+          fetch('/api/update-status', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              parcel_id: parcel.id,
+              on_truck: false,
+            }),
+          })
+        )
+      );
+
+      // Refresh data
+      const refreshResponse = await fetch(
+        `/api/parcels?sub_district=${selectedSubDistrict}&village_full_name=${encodeURIComponent(selectedVillage)}`
+      );
+      const updatedParcels = await refreshResponse.json();
+      const sortedParcels = [...updatedParcels].sort((a: Parcel, b: Parcel) =>
+        (a.display_order || 0) - (b.display_order || 0)
+      );
+      setParcels(sortedParcels);
+      setStartTime(null); // Reset timer
+      setMessage('✅ เคลียร์ทั้งหมดแล้ว');
+      playSound(successSoundRef);
+      speak('เคลียร์ทั้งหมดแล้ว');
+    } catch (error) {
+      console.error('Failed to clear all:', error);
+      setMessage('❌ ไม่สามารถเคลียร์ทั้งหมดได้');
+      playSound(errorSoundRef);
+    }
+  };
+
+  // ✅ Function to find matching parcel (shared logic)
   const findMatchingParcel = useCallback((
-    allParcels: Parcel[], 
-    scannedAddress: string, 
+    allParcels: Parcel[],
+    scannedAddress: string,
     searchAllVillages = false
   ): (Parcel & { foundInDifferentVillage?: boolean; foundVillage?: string; foundSubDistrict?: string }) | null => {
     const scannedClean = scannedAddress.replace(/[^0-9\/]/g, '');
-
     let matchedParcel: (Parcel & { foundInDifferentVillage?: boolean; foundVillage?: string; foundSubDistrict?: string }) | null = null;
     let isFromDifferentVillage = false;
 
     // ถ้า clean แล้วเหลือตัวเลข → ค้นหาแบบตัวเลข
     if (scannedClean && scannedClean.length >= 2 && !scannedClean.startsWith('0')) {
-      
       // กรอง: เฉพาะที่อยู่ที่ขึ้นต้นด้วยตัวเลข
-      const addressesStartWithNumber = allParcels.filter((p: Parcel) => 
+      const addressesStartWithNumber = allParcels.filter((p: Parcel) =>
         /^[\d\/]/.test(p.address.trim())
       );
 
@@ -268,14 +329,11 @@ export default function ScanParcelPage() {
       const priority1Match = addressesStartWithNumber.find((p: Parcel) => {
         const addressTrimmed = p.address.trim();
         const houseNumberMatch = addressTrimmed.match(/^([\d\/]+)/);
-        
         if (!houseNumberMatch) return false;
-        
         const houseNumber = houseNumberMatch[1];
         const houseNumberClean = houseNumber.replace(/[^0-9\/]/g, '');
         return houseNumberClean === scannedClean;
       });
-
       if (priority1Match) {
         matchedParcel = priority1Match as (Parcel & { foundInDifferentVillage?: boolean; foundVillage?: string; foundSubDistrict?: string });
       }
@@ -288,7 +346,6 @@ export default function ScanParcelPage() {
           const firstPartClean = firstPart.replace(/[^0-9\/]/g, '');
           return firstPartClean === scannedClean && firstPartClean.length > 0;
         });
-        
         if (priority2Match) {
           matchedParcel = priority2Match as (Parcel & { foundInDifferentVillage?: boolean; foundVillage?: string; foundSubDistrict?: string });
         }
@@ -300,7 +357,6 @@ export default function ScanParcelPage() {
           const addressClean = p.address.replace(/[^0-9\/]/g, '');
           return addressClean.startsWith(scannedClean);
         });
-        
         if (priority3Match) {
           matchedParcel = priority3Match as (Parcel & { foundInDifferentVillage?: boolean; foundVillage?: string; foundSubDistrict?: string });
         }
@@ -312,7 +368,6 @@ export default function ScanParcelPage() {
           const addressClean = p.address.replace(/[^0-9\/]/g, '');
           return addressClean.includes(scannedClean);
         });
-        
         if (priority4Match) {
           matchedParcel = priority4Match as (Parcel & { foundInDifferentVillage?: boolean; foundVillage?: string; foundSubDistrict?: string });
         }
@@ -322,18 +377,14 @@ export default function ScanParcelPage() {
       if (matchedParcel && matchedParcel.village !== selectedVillage) {
         isFromDifferentVillage = true;
       }
-
     } else if (!scannedClean || scannedClean.length === 0) {
       // ถ้า clean แล้วไม่เหลืออะไร → ค้นหาแบบชื่อสถานที่
-      
       // ค้นหาแบบ contains ชื่อเต็ม
       const fullNameMatch = allParcels.find((p: Parcel) => {
         const addressLower = p.address.toLowerCase();
         const scannedLower = scannedAddress.toLowerCase();
-        
         return addressLower.includes(scannedLower);
       });
-
       if (fullNameMatch) {
         matchedParcel = fullNameMatch as (Parcel & { foundInDifferentVillage?: boolean; foundVillage?: string; foundSubDistrict?: string });
       } else {
@@ -341,16 +392,14 @@ export default function ScanParcelPage() {
         const words = scannedAddress.split(/[\s,]/);
         const partialNameMatch = allParcels.find((p: Parcel) => {
           const addressLower = p.address.toLowerCase();
-          return words.some(word => 
+          return words.some(word =>
             word.length > 0 && addressLower.includes(word.toLowerCase())
           );
         });
-
         if (partialNameMatch) {
           matchedParcel = partialNameMatch as (Parcel & { foundInDifferentVillage?: boolean; foundVillage?: string; foundSubDistrict?: string });
         }
       }
-
       // ตรวจสอบว่าอยู่หมู่เดียวกันไหม
       if (matchedParcel && matchedParcel.village !== selectedVillage) {
         isFromDifferentVillage = true;
@@ -364,7 +413,6 @@ export default function ScanParcelPage() {
         matchedParcel.foundSubDistrict = matchedParcel.sub_district;
       }
     }
-
     return matchedParcel;
   }, [selectedVillage]);
 
@@ -386,7 +434,6 @@ export default function ScanParcelPage() {
         `/api/parcels?sub_district=${selectedSubDistrict}&village_full_name=${encodeURIComponent(selectedVillage)}`
       );
       const allParcels = await response.json();
-
       let matchedParcel = findMatchingParcel(allParcels, manualAddress);
 
       if (!matchedParcel) {
@@ -394,7 +441,6 @@ export default function ScanParcelPage() {
           `/api/parcels?sub_district=${selectedSubDistrict}`
         );
         const allSubDistrictParcels = await allSubDistrictResponse.json();
-        
         matchedParcel = findMatchingParcel(allSubDistrictParcels, manualAddress, true);
       }
 
@@ -407,25 +453,23 @@ export default function ScanParcelPage() {
 
       if (matchedParcel) {
         const isDuplicate = matchedParcel.on_truck === true;
-        
+
         if (matchedParcel.foundInDifferentVillage) {
           const warningMsg = `⚠️ ที่อยู่นี้อยู่ในหมู่ ${matchedParcel.foundVillage}, ${matchedParcel.foundSubDistrict}`;
           setMessage(warningMsg);
           speak(`ที่อยู่นี้อยู่ในหมู่ ${matchedParcel.foundVillage}`);
           playSound(errorSoundRef);
         }
-        
+
         if (isDuplicate) {
           const scannedList = parcels.filter((p) => p.on_truck === true);
           const duplicateIndex = scannedList.findIndex(p => p.id === matchedParcel.id) + 1;
-          
           scanResult.match = true;
           scanResult.message = `พัสดุนี้สแกนแล้ว - ลำดับที่ ${duplicateIndex}`;
           scanResult.parcel = matchedParcel;
           if (!matchedParcel.foundInDifferentVillage) {
             setMessage(`⚠️ ${scanResult.message}`);
           }
-          
           playSound(duplicateSoundRef);
           speak(`พัสดุนี้สแกนแล้ว ลำดับที่ ${duplicateIndex}`);
 
@@ -445,8 +489,7 @@ export default function ScanParcelPage() {
                 `/api/parcels?sub_district=${selectedSubDistrict}&village_full_name=${encodeURIComponent(selectedVillage)}`
               );
               const updatedParcels = await refreshResponse.json();
-              
-              const sortedParcels = [...updatedParcels].sort((a: Parcel, b: Parcel) => 
+              const sortedParcels = [...updatedParcels].sort((a: Parcel, b: Parcel) =>
                 (a.display_order || 0) - (b.display_order || 0)
               );
               setParcels(sortedParcels);
@@ -479,19 +522,16 @@ export default function ScanParcelPage() {
                   `/api/parcels?sub_district=${selectedSubDistrict}&village_full_name=${encodeURIComponent(selectedVillage)}`
                 );
                 const updatedParcels = await refreshResponse.json();
-                
-                const sortedParcels = [...updatedParcels].sort((a: Parcel, b: Parcel) => 
+                const sortedParcels = [...updatedParcels].sort((a: Parcel, b: Parcel) =>
                   (a.display_order || 0) - (b.display_order || 0)
                 );
                 setParcels(sortedParcels);
-                
+
                 const updatedScannedList = sortedParcels.filter((p: Parcel) => p.on_truck === true);
                 const displayIndex = updatedScannedList.findIndex((p: Parcel) => p.id === matchedParcel.id) + 1;
-                
                 playSound(successSoundRef);
                 speak(`สแกนสำเร็จ ลำดับที่ ${displayIndex}`);
               }
-              
               setManualAddress('');
               setShowManualEntry(false);
             } else {
@@ -509,7 +549,6 @@ export default function ScanParcelPage() {
         const notFoundMsg = `ไม่พบพัสดุ "${manualAddress}" ในระบบ`;
         scanResult.message = notFoundMsg;
         setMessage(`❌ ${notFoundMsg}`);
-        
         playSound(errorSoundRef);
         speak(`ไม่พบพัสดุ ${manualAddress} ในระบบ`);
       }
@@ -535,7 +574,6 @@ export default function ScanParcelPage() {
 
     const canvas = canvasRef.current;
     const video = videoRef.current;
-
     canvas.width = video.videoWidth;
     canvas.height = video.videoHeight;
     const context = canvas.getContext('2d');
@@ -543,7 +581,6 @@ export default function ScanParcelPage() {
 
     const scaleX = canvas.width / (videoRef.current?.clientWidth || 1);
     const scaleY = canvas.height / (videoRef.current?.clientHeight || 1);
-
     const cropX = frameBounds.x * scaleX;
     const cropY = frameBounds.y * scaleY;
     const cropWidth = frameBounds.width * scaleX;
@@ -552,14 +589,12 @@ export default function ScanParcelPage() {
     setIsScanning(true);
     setMessage('🔍 กำลังสแกน...');
     setLastScanResult(null);
-
     playSound(scanSoundRef);
 
     const croppedCanvas = document.createElement('canvas');
     croppedCanvas.width = cropWidth;
     croppedCanvas.height = cropHeight;
     const croppedContext = croppedCanvas.getContext('2d');
-    
     if (croppedContext) {
       croppedContext.drawImage(
         canvas,
@@ -586,7 +621,6 @@ export default function ScanParcelPage() {
       try {
         const formData = new FormData();
         formData.append('image', blob, 'capture.jpg');
-        
         const response = await fetch('/api/ocr', {
           method: 'POST',
           body: formData,
@@ -609,13 +643,11 @@ export default function ScanParcelPage() {
         await processScannedText(result.text);
       } catch (error) {
         console.error('OCR Error:', error);
-        
         if (error instanceof Error) {
           setMessage('❌ เกิดข้อผิดพลาด: ' + error.message);
         } else {
           setMessage('❌ เกิดข้อผิดพลาดในการสแกน');
         }
-        
         playSound(errorSoundRef);
         speak('เกิดข้อผิดพลาดในการสแกน');
         setIsScanning(false);
@@ -645,7 +677,7 @@ export default function ScanParcelPage() {
 
       if (!scannedAddress) {
         const allNumbers = cleanText.match(/\d+/g) || [];
-        const validNumbers = allNumbers.filter(n => 
+        const validNumbers = allNumbers.filter(n =>
           n.length >= 2 && n.length <= 4 && parseInt(n) < 9999 && parseInt(n) > 9
         );
         if (validNumbers.length > 0) {
@@ -659,7 +691,6 @@ export default function ScanParcelPage() {
 
       let scannedRouteCode = null;
       const allAlphaNum = cleanText.match(/[A-Z]\d+|[A-Z]+\d+|\d+[A-Z]/g) || [];
-      
       const routePatterns = [
         /\b(\d{3}[A-Z])\b/,
         /\b([A-Z]+\d+-?\d+)\b/,
@@ -673,7 +704,6 @@ export default function ScanParcelPage() {
           break;
         }
       }
-
       if (!scannedRouteCode && allAlphaNum.length > 0) {
         const filtered = allAlphaNum.filter(a => a !== scannedAddress);
         if (filtered.length > 0) {
@@ -704,12 +734,11 @@ export default function ScanParcelPage() {
       if (scannedRouteCode && routeCode) {
         const routeCodeNormalized = scannedRouteCode.replace(/[^A-Z0-9]/gi, '').toUpperCase();
         const expectedRouteCodeNormalized = routeCode.replace(/[^A-Z0-9]/gi, '').toUpperCase();
-        
-        const routeMatch = routeCodeNormalized.includes(expectedRouteCodeNormalized) || 
-                          expectedRouteCodeNormalized.includes(routeCodeNormalized) ||
-                          (routeCodeNormalized.length >= 3 && 
-                           expectedRouteCodeNormalized.includes(routeCodeNormalized.substring(0, 3)));
-        
+        const routeMatch = routeCodeNormalized.includes(expectedRouteCodeNormalized) ||
+          expectedRouteCodeNormalized.includes(routeCodeNormalized) ||
+          (routeCodeNormalized.length >= 3 &&
+            expectedRouteCodeNormalized.includes(routeCodeNormalized.substring(0, 3)));
+
         if (!routeMatch) {
           scanResult.message = `รหัสนำส่งไม่ตรงกับเส้นทาง (พบ: ${scannedRouteCode}, ต้องการ: ${routeCode})`;
           setMessage(`❌ ${scanResult.message}`);
@@ -724,7 +753,6 @@ export default function ScanParcelPage() {
         `/api/parcels?sub_district=${selectedSubDistrict}&village_full_name=${encodeURIComponent(selectedVillage)}`
       );
       const allParcels = await response.json();
-
       let matchedParcel = findMatchingParcel(allParcels, scannedAddress);
 
       if (!matchedParcel) {
@@ -732,31 +760,28 @@ export default function ScanParcelPage() {
           `/api/parcels?sub_district=${selectedSubDistrict}`
         );
         const allSubDistrictParcels = await allSubDistrictResponse.json();
-        
         matchedParcel = findMatchingParcel(allSubDistrictParcels, scannedAddress, true);
       }
 
       if (matchedParcel) {
         const isDuplicate = matchedParcel.on_truck === true;
-        
+
         if (matchedParcel.foundInDifferentVillage) {
           const warningMsg = `⚠️ ที่อยู่นี้อยู่ในหมู่ ${matchedParcel.foundVillage}, ${matchedParcel.foundSubDistrict}`;
           setMessage(warningMsg);
           speak(`ที่อยู่นี้อยู่ในหมู่ ${matchedParcel.foundVillage}`);
           playSound(errorSoundRef);
         }
-        
+
         if (isDuplicate) {
           const scannedList = parcels.filter((p) => p.on_truck === true);
           const duplicateIndex = scannedList.findIndex(p => p.id === matchedParcel.id) + 1;
-          
           scanResult.match = true;
           scanResult.message = `พัสดุนี้สแกนแล้ว - ลำดับที่ ${duplicateIndex}`;
           scanResult.parcel = matchedParcel;
           if (!matchedParcel.foundInDifferentVillage) {
             setMessage(`⚠️ ${scanResult.message}`);
           }
-          
           playSound(duplicateSoundRef);
           speak(`พัสดุนี้สแกนแล้ว ลำดับที่ ${duplicateIndex}`);
 
@@ -776,8 +801,7 @@ export default function ScanParcelPage() {
                 `/api/parcels?sub_district=${selectedSubDistrict}&village_full_name=${encodeURIComponent(selectedVillage)}`
               );
               const updatedParcels = await refreshResponse.json();
-              
-              const sortedParcels = [...updatedParcels].sort((a: Parcel, b: Parcel) => 
+              const sortedParcels = [...updatedParcels].sort((a: Parcel, b: Parcel) =>
                 (a.display_order || 0) - (b.display_order || 0)
               );
               setParcels(sortedParcels);
@@ -810,15 +834,13 @@ export default function ScanParcelPage() {
                   `/api/parcels?sub_district=${selectedSubDistrict}&village_full_name=${encodeURIComponent(selectedVillage)}`
                 );
                 const updatedParcels = await refreshResponse.json();
-                
-                const sortedParcels = [...updatedParcels].sort((a: Parcel, b: Parcel) => 
+                const sortedParcels = [...updatedParcels].sort((a: Parcel, b: Parcel) =>
                   (a.display_order || 0) - (b.display_order || 0)
                 );
                 setParcels(sortedParcels);
-                
+
                 const updatedScannedList = sortedParcels.filter((p: Parcel) => p.on_truck === true);
                 const displayIndex = updatedScannedList.findIndex((p: Parcel) => p.id === matchedParcel.id) + 1;
-                
                 playSound(successSoundRef);
                 speak(`สแกนสำเร็จ ลำดับที่ ${displayIndex}`);
               }
@@ -837,7 +859,6 @@ export default function ScanParcelPage() {
         const notFoundMsg = `ไม่พบพัสดุ "${scannedAddress}" ในระบบ`;
         scanResult.message = notFoundMsg;
         setMessage(`❌ ${notFoundMsg}`);
-        
         playSound(errorSoundRef);
         speak(`ไม่พบพัสดุ ${scannedAddress} ในระบบ`);
       }
@@ -864,432 +885,507 @@ export default function ScanParcelPage() {
     [parcels]
   );
 
+  // ✅ ฟังก์ชันคำนวณเวลาที่ผ่านไป
+  const elapsedTime = useMemo(() => {
+    if (!startTime) return '00:00';
+    const elapsed = Math.floor((Date.now() - startTime) / 1000);
+    const minutes = Math.floor(elapsed / 60);
+    const seconds = elapsed % 60;
+    return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+  }, [startTime]);
+
+  // ✅ ฟังก์ชันคำนวณ % ความสำเร็จ
+  const successPercentage = useMemo(() => {
+    if (parcels.length === 0) return 0;
+    return Math.round((scannedParcelsList.length / parcels.length) * 100);
+  }, [parcels, scannedParcelsList]);
+
+  // ✅ ฟังก์ชันกรองรายการพัสดุตามคำค้นหา
+  const filteredScannedParcels = useMemo(() => {
+    if (!searchQuery.trim()) return scannedParcelsList;
+    return scannedParcelsList.filter(parcel =>
+      parcel.address.toLowerCase().includes(searchQuery.toLowerCase())
+    );
+  }, [scannedParcelsList, searchQuery]);
+
   return (
-    <div className="container" style={{ maxWidth: '800px' }}>
+    <div style={{ minHeight: '100vh', background: 'var(--background)', padding: '1rem' }}>
       {/* Header */}
-      <div style={{ 
-        display: 'flex', 
-        justifyContent: 'space-between', 
-        alignItems: 'center',
-        marginBottom: '1rem',
-        gap: '1rem',
-        flexWrap: 'wrap'
-      }}>
-        <Link href="/" className="btn-secondary" style={{ margin: 0 }}>
-          <i className="fas fa-arrow-left"></i> กลับ
-        </Link>
-        <h1 style={{ fontSize: '1.5rem', fontWeight: '800', margin: 0 }}>
+      <div style={{ display: 'flex', alignItems: 'center', marginBottom: '1.5rem', gap: '1rem' }}>
+        <Link href="/" style={{ fontSize: '1.5rem', textDecoration: 'none' }}>←</Link>
+        <h1 style={{ fontSize: '1.5rem', fontWeight: 'bold', color: 'var(--text-primary)' }}>
           📦 สแกนพัสดุ
         </h1>
-        <div style={{ width: '100px' }}></div>
       </div>
 
       {/* Info Box */}
       <div style={{
-        background: 'rgba(255, 169, 40, 0.1)',
-        border: '1px solid rgba(255, 169, 40, 0.3)',
-        borderRadius: '12px',
         padding: '1rem',
-        marginBottom: '1rem',
-        fontSize: '0.875rem'
+        background: 'var(--surface-elevated)',
+        border: '1px solid var(--divider)',
+        borderRadius: '8px',
+        marginBottom: '1.5rem',
+        fontSize: '0.875rem',
+        color: 'var(--text-secondary)',
       }}>
-        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'flex-start' }}>
-          <i className="fas fa-lightbulb" style={{ color: '#ffa928', fontSize: '1.25rem' }}></i>
-          <div style={{ color: 'var(--text-primary)' }}>
-            <strong>เคล็ดลับ:</strong> วางป้ายพัสดุให้ชัดในกรอบแดง ให้แสงสว่างเพียงพอ และถือกล้องให้นิ่ง
-          </div>
-        </div>
+        เคล็ดลับ: วางป้ายพัสดุให้ชัดในกรอบแดง ให้แสงสว่างเพียงพอ และถือกล้องให้นิ่ง
       </div>
 
       {/* Filters */}
-      <div className="glass-card" style={{ padding: '1rem', marginBottom: '1rem' }}>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '0.75rem' }}>
-          <div>
-            <label style={{ fontSize: '0.75rem', fontWeight: '600', color: 'var(--text-secondary)', display: 'block', marginBottom: '0.25rem' }}>
-              ตำบล
-            </label>
-            <select
-              value={selectedSubDistrict}
-              onChange={(e) => {
-                setSelectedSubDistrict(e.target.value);
-                setSelectedVillage('');
-                setParcels([]);
-              }}
-              className="input-field"
-              style={{ fontSize: '0.875rem', padding: '0.625rem', height: 'auto' }}
-            >
-              <option value="">เลือกตำบล</option>
-              {Object.keys(locations).map((subDistrict) => (
-                <option key={subDistrict} value={subDistrict}>
-                  {subDistrict}
-                </option>
-              ))}
-            </select>
-          </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', marginBottom: '1.5rem' }}>
+        <div>
+          <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', fontWeight: '600' }}>
+            ตำบล
+          </label>
+          <select
+            value={selectedSubDistrict}
+            onChange={(e) => {
+              setSelectedSubDistrict(e.target.value);
+              setSelectedVillage('');
+              setParcels([]);
+            }}
+            className="input-field"
+            style={{ fontSize: '1rem', padding: '0.875rem', height: 'auto', minHeight: '48px', width: '100%' }}
+          >
+            <option value="">เลือกตำบล</option>
+            {Object.keys(locations).map((subDistrict) => (
+              <option key={subDistrict} value={subDistrict}>
+                {subDistrict}
+              </option>
+            ))}
+          </select>
+        </div>
 
-          <div>
-            <label style={{ fontSize: '0.75rem', fontWeight: '600', color: 'var(--text-secondary)', display: 'block', marginBottom: '0.25rem' }}>
-              หมู่
-            </label>
-            <select
-              value={selectedVillage}
-              onChange={(e) => handleVillageChange(e.target.value)}
-              disabled={!selectedSubDistrict}
-              className="input-field"
-              style={{ fontSize: '0.875rem', padding: '0.625rem', height: 'auto' }}
-            >
-              <option value="">เลือกหมู่</option>
-              {selectedSubDistrict &&
-                locations[selectedSubDistrict]?.map((villageCode: string) => {
-                  const villageName = villageNames[villageCode] || villageCode;
-                  return (
-                    <option key={villageCode} value={villageName}>
-                      หมู่ {villageName}
-                    </option>
-                  );
-                })}
-            </select>
-          </div>
+        <div>
+          <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', fontWeight: '600' }}>
+            หมู่
+          </label>
+          <select
+            value={selectedVillage}
+            onChange={(e) => handleVillageChange(e.target.value)}
+            disabled={!selectedSubDistrict}
+            className="input-field"
+            style={{ fontSize: '1rem', padding: '0.875rem', height: 'auto', minHeight: '48px', width: '100%' }}
+          >
+            <option value="">เลือกหมู่</option>
+            {selectedSubDistrict &&
+              locations[selectedSubDistrict]?.map((villageCode: string) => {
+                const villageName = villageNames[villageCode] || villageCode;
+                return (
+                  <option key={villageCode} value={villageName}>
+                    หมู่ {villageName}
+                  </option>
+                );
+              })}
+          </select>
+        </div>
 
-          <div>
-            <label style={{ fontSize: '0.75rem', fontWeight: '600', color: 'var(--text-secondary)', display: 'block', marginBottom: '0.25rem' }}>
-              รหัสนำส่ง
-            </label>
-            <input
-              type="text"
-              value={routeCode}
-              onChange={(e) => setRouteCode(e.target.value.toUpperCase())}
-              placeholder="002A"
-              className="input-field"
-              style={{ fontSize: '0.875rem', padding: '0.625rem', height: 'auto' }}
-            />
-          </div>
+        <div>
+          <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', fontWeight: '600' }}>
+            รหัสนำส่ง
+          </label>
+          <input
+            type="text"
+            value={routeCode}
+            onChange={(e) => setRouteCode(e.target.value.toUpperCase())}
+            placeholder="002A"
+            className="input-field"
+            style={{ fontSize: '1rem', padding: '0.875rem', height: 'auto', minHeight: '48px', width: '100%' }}
+          />
         </div>
       </div>
 
       {/* Manual Entry Section */}
-      <div className="glass-card" style={{ padding: '1rem', marginBottom: '1rem' }}>
-        <button
-          onClick={() => setShowManualEntry(!showManualEntry)}
-          style={{
-            width: '100%',
-            padding: '0.75rem',
-            background: 'var(--surface-elevated)',
-            border: '1px solid var(--divider)',
-            borderRadius: '8px',
-            fontSize: '0.95rem',
-            fontWeight: '600',
-            color: 'var(--text-primary)',
-            cursor: 'pointer',
-            marginBottom: showManualEntry ? '1rem' : '0',
-          }}
-        >
-          <i className="fas fa-keyboard" style={{ marginRight: '0.5rem' }}></i>
-          {showManualEntry ? 'ซ่อนการกรอกที่อยู่' : 'กรอกที่อยู่เอง'}
-        </button>
+      <button
+        onClick={() => setShowManualEntry(!showManualEntry)}
+        style={{
+          width: '100%',
+          padding: '0.75rem',
+          background: 'var(--surface-elevated)',
+          border: '1px solid var(--divider)',
+          borderRadius: '8px',
+          fontSize: '0.95rem',
+          fontWeight: '600',
+          color: 'var(--text-primary)',
+          cursor: 'pointer',
+          marginBottom: showManualEntry ? '1rem' : '0',
+        }}
+      >
+        {showManualEntry ? 'ซ่อนการกรอกที่อยู่' : 'กรอกที่อยู่เอง'}
+      </button>
 
-        {showManualEntry && (
-          <div style={{ display: 'flex', gap: '0.5rem' }}>
-            <input
-              type="text"
-              value={manualAddress}
-              onChange={(e) => setManualAddress(e.target.value)}
-              placeholder="ป้อนที่อยู่ เช่น 219/5"
-              className="input-field"
-              style={{ fontSize: '0.875rem', padding: '0.625rem', flex: 1 }}
-              onKeyPress={(e) => {
-                if (e.key === 'Enter') {
-                  handleManualEntry();
-                }
-              }}
-            />
-            <button
-              onClick={handleManualEntry}
-              className="btn-primary"
-              style={{ padding: '0.625rem 1rem', fontSize: '0.875rem' }}
-            >
-              <i className="fas fa-search"></i>
-              ค้นหา
-            </button>
+      {showManualEntry && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginBottom: '1.5rem' }}>
+          <input
+            type="text"
+            value={manualAddress}
+            onChange={(e) => setManualAddress(e.target.value)}
+            placeholder="ป้อนที่อยู่ เช่น 219/5"
+            className="input-field"
+            style={{ fontSize: '1rem', padding: '0.875rem', width: '100%', minHeight: '48px' }}
+            onKeyPress={(e) => {
+              if (e.key === 'Enter') {
+                handleManualEntry();
+              }
+            }}
+          />
+          <button
+            onClick={handleManualEntry}
+            style={{
+              padding: '0.875rem 1.5rem',
+              background: 'var(--primary)',
+              color: 'white',
+              border: 'none',
+              borderRadius: '8px',
+              fontWeight: '600',
+              cursor: 'pointer',
+              minHeight: '48px',
+              width: '100%'
+            }}
+          >
+            ค้นหา
+          </button>
+        </div>
+      )}
+
+      {/* Camera View */}
+      <div style={{
+        position: 'relative',
+        width: '100%',
+        aspectRatio: '4 / 3',
+        background: '#000',
+        borderRadius: '8px',
+        overflow: 'hidden',
+        marginBottom: '1rem',
+      }}>
+        {!cameraActive && (
+          <div style={{
+            position: 'absolute',
+            top: '50%',
+            left: '50%',
+            transform: 'translate(-50%, -50%)',
+            color: 'white',
+            textAlign: 'center',
+            fontSize: '0.875rem',
+          }}>
+            กดปุ่ม "เปิดกล้อง" เพื่อเริ่มสแกนพัสดุ
+          </div>
+        )}
+
+        <video
+          ref={videoRef}
+          autoPlay
+          playsInline
+          style={{ width: '100%', height: '100%', objectFit: 'cover', display: cameraActive ? 'block' : 'none' }}
+        />
+
+        {cameraActive && (
+          <div
+            ref={frameRef}
+            style={{
+              position: 'absolute',
+              top: '50%',
+              left: '50%',
+              transform: 'translate(-50%, -50%)',
+              width: '80%',
+              height: '60%',
+              border: '3px solid red',
+              borderRadius: '8px',
+              pointerEvents: 'none',
+            }}
+          >
+            <div style={{
+              position: 'absolute',
+              top: '-30px',
+              left: '50%',
+              transform: 'translateX(-50%)',
+              background: 'rgba(255, 0, 0, 0.8)',
+              color: 'white',
+              padding: '0.25rem 0.75rem',
+              borderRadius: '4px',
+              fontSize: '0.75rem',
+              fontWeight: 'bold',
+            }}>
+              📦 วางป้ายพัสดุในกรอบ
+            </div>
           </div>
         )}
       </div>
 
-      {/* Camera View */}
-      <div className="glass-card" style={{ padding: '1rem', marginBottom: '1rem' }}>
-        <div style={{ position: 'relative', width: '100%', background: '#000', borderRadius: '12px', overflow: 'hidden' }}>
-          <video
-            ref={videoRef}
-            autoPlay
-            playsInline
-            style={{
-              width: '100%',
-              height: 'auto',
-              maxHeight: '60vh',
-              display: cameraActive ? 'block' : 'none',
-            }}
-          />
-          
-          {!cameraActive && (
-            <div style={{
-              aspectRatio: '4/3',
-              display: 'flex',
-              flexDirection: 'column',
-              alignItems: 'center',
-              justifyContent: 'center',
-              gap: '1rem',
-              background: 'var(--surface)',
-              padding: '2rem'
-            }}>
-              <i className="fas fa-camera" style={{ fontSize: '3rem', color: 'var(--divider)' }}></i>
-              <p style={{ color: 'var(--text-secondary)', textAlign: 'center', fontSize: '0.875rem' }}>
-                กดปุ่ม "เปิดกล้อง" เพื่อเริ่มสแกนพัสดุ
-              </p>
-            </div>
-          )}
+      <canvas ref={canvasRef} style={{ display: 'none' }} />
 
-          {cameraActive && (
-            <div
-              ref={frameRef}
+      {/* Camera Controls */}
+      <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1.5rem' }}>
+        {!cameraActive ? (
+          <button
+            onClick={startCamera}
+            style={{
+              flex: 1,
+              padding: '0.875rem',
+              background: 'var(--primary)',
+              color: 'white',
+              border: 'none',
+              borderRadius: '8px',
+              fontWeight: '600',
+              cursor: 'pointer',
+              minHeight: '48px'
+            }}
+          >
+            เปิดกล้อง
+          </button>
+        ) : (
+          <>
+            <button
+              onClick={captureAndScan}
+              disabled={isScanning}
               style={{
-                position: 'absolute',
-                top: '50%',
-                left: '50%',
-                transform: 'translate(-50%, -50%)',
-                width: '80%',
-                maxWidth: '300px',
-                aspectRatio: '3/2',
-                border: '3px solid var(--primary)',
-                borderRadius: '12px',
-                pointerEvents: 'none',
-                boxShadow: '0 0 0 9999px rgba(0, 0, 0, 0.5)',
+                flex: 1,
+                padding: '0.875rem',
+                background: isScanning ? 'var(--divider)' : 'var(--success)',
+                color: 'white',
+                border: 'none',
+                borderRadius: '8px',
+                fontWeight: '600',
+                cursor: isScanning ? 'not-allowed' : 'pointer',
+                minHeight: '48px'
               }}
             >
-              <div style={{
-                position: 'absolute',
-                top: '-30px',
-                left: '50%',
-                transform: 'translateX(-50%)',
-                background: 'var(--primary)',
-                color: 'white',
-                padding: '0.5rem 1rem',
-                borderRadius: '8px',
-                fontSize: '0.875rem',
-                fontWeight: '600',
-                whiteSpace: 'nowrap'
-              }}>
-                📦 วางป้ายพัสดุในกรอบ
-              </div>
-            </div>
-          )}
-        </div>
-
-        {/* Camera Controls */}
-        <div style={{ display: 'flex', gap: '0.75rem', marginTop: '1rem' }}>
-          {!cameraActive ? (
-            <button
-              onClick={startCamera}
-              className="btn-primary"
-              style={{ flex: 1 }}
-            >
-              <i className="fas fa-video"></i>
-              เปิดกล้อง
+              {isScanning ? 'กำลังสแกน...' : 'สแกน'}
             </button>
-          ) : (
-            <>
-              <button
-                onClick={captureAndScan}
-                disabled={isScanning || !selectedSubDistrict || !selectedVillage || !routeCode}
-                className="btn-primary"
-                style={{ flex: 2 }}
-              >
-                <i className="fas fa-camera"></i>
-                {isScanning ? 'กำลังสแกน...' : 'สแกน'}
-              </button>
-              <button
-                onClick={stopCamera}
-                className="btn-secondary"
-                style={{ flex: 1 }}
-              >
-                <i className="fas fa-times"></i>
-                ปิด
-              </button>
-            </>
-          )}
-        </div>
+            <button
+              onClick={stopCamera}
+              style={{
+                padding: '0.875rem 1.5rem',
+                background: 'var(--error)',
+                color: 'white',
+                border: 'none',
+                borderRadius: '8px',
+                fontWeight: '600',
+                cursor: 'pointer',
+                minHeight: '48px'
+              }}
+            >
+              ปิด
+            </button>
+          </>
+        )}
       </div>
-
-      <canvas ref={canvasRef} style={{ display: 'none' }} />
 
       {/* Message */}
       {message && (
-        <div
-          style={{
-            padding: '0.875rem 1rem',
-            background: message.includes('✅')
-              ? 'rgba(70, 211, 105, 0.1)'
-              : message.includes('⚠️')
-              ? 'rgba(255, 169, 40, 0.1)'
-              : 'rgba(229, 9, 20, 0.1)',
-            borderRadius: '12px',
-            marginBottom: '1rem',
-            border: `2px solid ${
-              message.includes('✅') 
-                ? 'rgba(70, 211, 105, 0.3)' 
-                : message.includes('⚠️')
-                ? 'rgba(255, 169, 40, 0.3)'
-                : 'rgba(229, 9, 20, 0.3)'
-            }`,
-            color: message.includes('✅') 
-              ? '#46d369' 
-              : message.includes('⚠️')
-              ? '#ffa928'
-              : '#e50914',
-            fontSize: '0.95rem',
-            fontWeight: '600',
-            textAlign: 'center',
-          }}
-        >
+        <div style={{
+          padding: '1rem',
+          background: 'var(--surface-elevated)',
+          border: '1px solid var(--divider)',
+          borderRadius: '8px',
+          marginBottom: '1.5rem',
+          fontSize: '0.875rem',
+          color: 'var(--text-primary)',
+        }}>
           {message}
         </div>
       )}
 
       {/* Scan Result Details */}
       {lastScanResult && (
-        <div className="glass-card" style={{ padding: '1rem', marginBottom: '1rem' }}>
-          <h3 style={{ fontSize: '0.95rem', fontWeight: '700', marginBottom: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <i className="fas fa-info-circle" style={{ color: 'var(--primary)' }}></i>
+        <div style={{
+          padding: '1rem',
+          background: 'var(--surface-elevated)',
+          border: '1px solid var(--divider)',
+          borderRadius: '8px',
+          marginBottom: '1.5rem',
+        }}>
+          <h3 style={{ fontSize: '0.95rem', fontWeight: '600', marginBottom: '0.75rem' }}>
             ข้อมูลที่ค้นหา
           </h3>
-          <div style={{ fontSize: '0.875rem', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-            {lastScanResult.scannedText && (
-              <div style={{ background: 'var(--surface-elevated)', padding: '0.75rem', borderRadius: '8px' }}>
-                <div style={{ color: 'var(--text-secondary)', fontSize: '0.75rem', marginBottom: '0.25rem' }}>
-                  ข้อความทั้งหมด:
-                </div>
-                <div style={{ color: 'var(--text-primary)', fontFamily: 'monospace', fontSize: '0.8rem', whiteSpace: 'pre-wrap', maxHeight: '100px', overflowY: 'auto' }}>
-                  {lastScanResult.scannedText}
-                </div>
+          {lastScanResult.scannedText && (
+            <div style={{ marginBottom: '0.5rem', fontSize: '0.875rem' }}>
+              <strong>ข้อความทั้งหมด:</strong>
+              <div style={{ marginTop: '0.25rem', color: 'var(--text-secondary)' }}>
+                {lastScanResult.scannedText}
               </div>
-            )}
-            
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem' }}>
-              {lastScanResult.scannedRouteCode && (
-                <div style={{ background: 'var(--surface-elevated)', padding: '0.75rem', borderRadius: '8px' }}>
-                  <div style={{ color: 'var(--text-secondary)', fontSize: '0.75rem', marginBottom: '0.25rem' }}>
-                    รหัส:
-                  </div>
-                  <div style={{ 
-                    color: '#46d369', 
-                    fontWeight: '700',
-                    fontSize: '1rem'
-                  }}>
-                    {lastScanResult.scannedRouteCode}
-                  </div>
-                </div>
-              )}
+            </div>
+          )}
+          {lastScanResult.scannedRouteCode && (
+            <div style={{ marginBottom: '0.5rem', fontSize: '0.875rem' }}>
+              <strong>รหัส:</strong> {lastScanResult.scannedRouteCode}
+            </div>
+          )}
+          {lastScanResult.scannedAddress && (
+            <div style={{ marginBottom: '0.5rem', fontSize: '0.875rem' }}>
+              <strong>ที่อยู่:</strong> {lastScanResult.scannedAddress}
+            </div>
+          )}
+        </div>
+      )}
 
-              {lastScanResult.scannedAddress && (
-                <div style={{ background: 'var(--surface-elevated)', padding: '0.75rem', borderRadius: '8px' }}>
-                  <div style={{ color: 'var(--text-secondary)', fontSize: '0.75rem', marginBottom: '0.25rem' }}>
-                    ที่อยู่:
-                  </div>
-                  <div style={{ 
-                    color: '#46d369', 
-                    fontWeight: '700',
-                    fontSize: '1rem'
-                  }}>
-                    {lastScanResult.scannedAddress}
-                  </div>
-                </div>
-              )}
+      {/* Stats with Timer and Success Percentage */}
+      {parcels.length > 0 && (
+        <div style={{
+          display: 'grid',
+          gridTemplateColumns: '1fr 1fr 1fr',
+          gap: '1rem',
+          marginBottom: '1.5rem',
+        }}>
+          <div style={{
+            padding: '1rem',
+            background: 'var(--success-bg)',
+            borderRadius: '8px',
+            textAlign: 'center',
+          }}>
+            <div style={{ fontSize: '0.875rem', color: 'var(--text-secondary)', marginBottom: '0.25rem' }}>
+              สแกนแล้ว
+            </div>
+            <div style={{ fontSize: '2rem', fontWeight: 'bold', color: 'var(--success)' }}>
+              {scannedParcelsList.length}
+            </div>
+          </div>
+          <div style={{
+            padding: '1rem',
+            background: 'var(--warning-bg)',
+            borderRadius: '8px',
+            textAlign: 'center',
+          }}>
+            <div style={{ fontSize: '0.875rem', color: 'var(--text-secondary)', marginBottom: '0.25rem' }}>
+              รอสแกน
+            </div>
+            <div style={{ fontSize: '2rem', fontWeight: 'bold', color: 'var(--warning)' }}>
+              {unscannedParcelsList.length}
+            </div>
+          </div>
+          <div style={{
+            padding: '1rem',
+            background: 'var(--primary-bg)',
+            borderRadius: '8px',
+            textAlign: 'center',
+          }}>
+            <div style={{ fontSize: '0.875rem', color: 'var(--text-secondary)', marginBottom: '0.25rem' }}>
+              ความสำเร็จ
+            </div>
+            <div style={{ fontSize: '2rem', fontWeight: 'bold', color: 'var(--primary)' }}>
+              {successPercentage}%
             </div>
           </div>
         </div>
       )}
 
-      {/* Stats */}
+      {/* Time and Clear All Buttons */}
       {parcels.length > 0 && (
-        <div style={{ 
-          display: 'grid', 
-          gridTemplateColumns: '1fr 1fr', 
-          gap: '0.75rem',
-          marginBottom: '1rem'
+        <div style={{
+          display: 'grid',
+          gridTemplateColumns: '1fr 1fr',
+          gap: '1rem',
+          marginBottom: '1.5rem',
         }}>
           <div style={{
-            background: 'rgba(70, 211, 105, 0.1)',
-            border: '1px solid rgba(70, 211, 105, 0.3)',
-            borderRadius: '12px',
             padding: '1rem',
-            textAlign: 'center'
+            background: 'var(--surface-elevated)',
+            border: '1px solid var(--divider)',
+            borderRadius: '8px',
+            textAlign: 'center',
           }}>
-            <div style={{ fontSize: '0.75rem', color: '#46d369', fontWeight: '600', marginBottom: '0.25rem' }}>
-              สแกนแล้ว
+            <div style={{ fontSize: '0.875rem', color: 'var(--text-secondary)', marginBottom: '0.25rem' }}>
+              ⏱️ เวลาที่ผ่านไป
             </div>
-            <div style={{ fontSize: '1.75rem', fontWeight: '900', color: '#46d369' }}>
-              {scannedParcelsList.length}
+            <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: 'var(--text-primary)' }}>
+              {elapsedTime}
             </div>
           </div>
-          <div style={{
-            background: 'rgba(229, 9, 20, 0.1)',
-            border: '1px solid rgba(229, 9, 20, 0.3)',
-            borderRadius: '12px',
-            padding: '1rem',
-            textAlign: 'center'
-          }}>
-            <div style={{ fontSize: '0.75rem', color: 'var(--primary)', fontWeight: '600', marginBottom: '0.25rem' }}>
-              รอสแกน
-            </div>
-            <div style={{ fontSize: '1.75rem', fontWeight: '900', color: 'var(--primary)' }}>
-              {unscannedParcelsList.length}
-            </div>
-          </div>
+          <button
+            onClick={handleClearAll}
+            style={{
+              padding: '1rem',
+              background: 'var(--error)',
+              color: 'white',
+              border: 'none',
+              borderRadius: '8px',
+              fontWeight: '600',
+              cursor: 'pointer',
+              fontSize: '0.95rem',
+            }}
+          >
+            🔄 เคลียร์ทั้งหมด
+          </button>
+        </div>
+      )}
+
+      {/* Search Box for Scanned Parcels */}
+      {scannedParcelsList.length > 0 && (
+        <div style={{ marginBottom: '1rem' }}>
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="ค้นหาพัสดุ..."
+            className="input-field"
+            style={{ 
+              fontSize: '1rem', 
+              padding: '0.875rem', 
+              width: '100%', 
+              minHeight: '48px',
+              borderRadius: '8px',
+              border: '1px solid var(--divider)'
+            }}
+          />
         </div>
       )}
 
       {/* Scanned Parcels */}
       {scannedParcelsList.length > 0 && (
-        <div className="glass-card" style={{ padding: '1rem', marginBottom: '1rem' }}>
-          <h3 style={{ fontSize: '1rem', fontWeight: '700', marginBottom: '0.75rem', color: '#46d369', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <i className="fas fa-check-circle"></i>
-            สแกนแล้ว ({scannedParcelsList.length})
+        <div style={{ marginBottom: '1.5rem' }}>
+          <h3 style={{ fontSize: '1rem', fontWeight: '600', marginBottom: '0.75rem' }}>
+            สแกนแล้ว ({filteredScannedParcels.length}/{scannedParcelsList.length})
           </h3>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-            {scannedParcelsList.map((parcel, index) => (
-              <div 
-                key={parcel.id} 
+            {filteredScannedParcels.map((parcel, index) => (
+              <div
+                key={parcel.id}
                 style={{
-                  background: 'rgba(70, 211, 105, 0.1)',
-                  border: '1px solid rgba(70, 211, 105, 0.3)',
-                  borderRadius: '8px',
-                  padding: '0.75rem',
                   display: 'flex',
                   alignItems: 'center',
-                  gap: '0.75rem'
+                  justifyContent: 'space-between',
+                  gap: '0.75rem',
+                  padding: '0.75rem',
+                  background: 'var(--surface-elevated)',
+                  border: '1px solid var(--success)',
+                  borderRadius: '8px',
                 }}
               >
-                <div
-                  style={{
-                    minWidth: '32px',
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flex: 1 }}>
+                  <div style={{
+                    width: '32px',
                     height: '32px',
-                    background: 'linear-gradient(135deg, #46d369, #2ecc71)',
-                    borderRadius: '8px',
+                    borderRadius: '50%',
+                    background: 'var(--success)',
+                    color: 'white',
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
+                    fontWeight: 'bold',
                     fontSize: '0.875rem',
-                    fontWeight: '800',
+                  }}>
+                    {scannedParcelsList.findIndex(p => p.id === parcel.id) + 1}
+                  </div>
+                  <div style={{ flex: 1, fontSize: '0.875rem' }}>
+                    {parcel.address}
+                  </div>
+                </div>
+                <button
+                  onClick={() => handleCancelScan(parcel.id)}
+                  style={{
+                    padding: '0.5rem 1rem',
+                    background: 'var(--error)',
                     color: 'white',
+                    border: 'none',
+                    borderRadius: '6px',
+                    fontWeight: '600',
+                    cursor: 'pointer',
+                    fontSize: '0.75rem',
+                    whiteSpace: 'nowrap'
                   }}
                 >
-                  {index + 1}
-                </div>
-                <div style={{ flex: 1 }}>
-                  <p style={{ fontSize: '0.875rem', fontWeight: '600', margin: 0, color: 'var(--text-primary)' }}>
-                    {parcel.address}
-                  </p>
-                </div>
-                <i className="fas fa-check-circle" style={{ color: '#46d369', fontSize: '1.25rem' }}></i>
+                  ยกเลิก
+                </button>
               </div>
             ))}
           </div>
@@ -1298,25 +1394,23 @@ export default function ScanParcelPage() {
 
       {/* Unscanned Parcels */}
       {unscannedParcelsList.length > 0 && (
-        <div className="glass-card" style={{ padding: '1rem' }}>
-          <h3 style={{ fontSize: '1rem', fontWeight: '700', marginBottom: '0.75rem', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <i className="fas fa-clock"></i>
+        <div>
+          <h3 style={{ fontSize: '1rem', fontWeight: '600', marginBottom: '0.75rem' }}>
             รอสแกน ({unscannedParcelsList.length})
           </h3>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
             {unscannedParcelsList.map((parcel) => (
-              <div 
+              <div
                 key={parcel.id}
                 style={{
+                  padding: '0.75rem',
                   background: 'var(--surface-elevated)',
                   border: '1px solid var(--divider)',
                   borderRadius: '8px',
-                  padding: '0.75rem'
+                  fontSize: '0.875rem',
                 }}
               >
-                <p style={{ fontSize: '0.875rem', fontWeight: '600', margin: 0, color: 'var(--text-secondary)' }}>
-                  {parcel.address}
-                </p>
+                {parcel.address}
               </div>
             ))}
           </div>
