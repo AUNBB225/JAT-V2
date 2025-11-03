@@ -79,17 +79,21 @@ export default function ImportCSV() {
 
       for (const row of rows) {
         try {
+          // ✅ แก้: แปลง latitude/longitude เป็น string
+          const latitude = row['Latitude'] || row['latitude'] || '';
+          const longitude = row['Longitude'] || row['longitude'] || '';
+
           const response = await fetch('/api/parcels', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               sub_district: subDistrict,
               village: village,
-              address: row['Address'] || row['address'],
-              parcel_count: parseInt(row['Parcel Count'] || row['parcel_count']) || 0,
+              address: row['Address'] || row['address'] || '',
+              parcel_count: parseInt(row['Parcel Count'] || row['parcel_count'] || '0') || 0,
               on_truck: (row['On Truck'] || row['on_truck'] || 'FALSE').toUpperCase() === 'TRUE',
-              latitude: row['Latitude'] || row['latitude'] || null,
-              longitude: row['Longitude'] || row['longitude'] || null,
+              latitude: latitude,  // ✅ string
+              longitude: longitude, // ✅ string
             }),
           });
 
@@ -98,11 +102,11 @@ export default function ImportCSV() {
           } else {
             const data = await response.json();
             errorCount++;
-            errors.push(`${row['Address']}: ${data.error || 'Unknown error'}`);
+            errors.push(`${row['Address'] || row['address']}: ${data.error || 'Unknown error'}`);
           }
         } catch (error) {
           errorCount++;
-          errors.push(`${row['Address']}: Network error`);
+          errors.push(`${row['Address'] || row['address']}: Network error`);
         }
 
         // หน่วงเวลาเล็กน้อยเพื่อไม่ให้ overload
@@ -284,7 +288,7 @@ export default function ImportCSV() {
 76/1,5,FALSE,14.16683,100.3099`}
             </pre>
             <p className="text-xs text-text-secondary mt-2">
-              * Parcel Count และ On Truck เป็น optional (ถ้าไม่มีจะเป็น 0 และ FALSE)
+              * Parcel Count, On Truck, Latitude, Longitude เป็น optional
             </p>
           </div>
         </div>
